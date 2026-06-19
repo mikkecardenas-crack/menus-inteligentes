@@ -12,6 +12,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'GEMINI_API_KEY no está configurada' }, { status: 500 });
     }
 
+    let fileUrl = '';
     let buffer: Buffer | null = null;
     let base64Data = '';
     let mimeType = '';
@@ -19,7 +20,8 @@ export async function POST(req: NextRequest) {
     const contentType = req.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
       const body = await req.json();
-      const { fileUrl, mimeType: bodyMimeType } = body;
+      fileUrl = body.fileUrl || '';
+      const { mimeType: bodyMimeType } = body;
       if (!fileUrl) {
         return NextResponse.json({ error: 'Falta la URL del archivo (fileUrl)' }, { status: 400 });
       }
@@ -77,7 +79,17 @@ export async function POST(req: NextRequest) {
 
     let result;
 
-    if (mimeType === 'application/pdf') {
+    // Verificar de manera robusta si es un PDF por:
+    // 1. MimeType en los metadatos (incluye 'pdf').
+    // 2. Extensión del archivo en la URL (si existe).
+    // 3. Firma digital o "magic bytes" en el buffer (los PDF inician con "%PDF" en ASCII).
+    const isPDF = 
+      mimeType.toLowerCase().includes('pdf') ||
+      (fileUrl && fileUrl.toLowerCase().split('?')[0].endsWith('.pdf')) ||
+      (buffer && buffer.length > 4 && buffer.slice(0, 4).toString('ascii') === '%PDF');
+
+    if (isPDF) {
+      mimeType = 'application/pdf';
       if (!buffer) {
         return NextResponse.json({ error: 'No se pudo obtener el contenido del archivo PDF' }, { status: 400 });
       }
