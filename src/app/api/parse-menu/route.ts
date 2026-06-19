@@ -8,16 +8,37 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'GEMINI_API_KEY no está configurada' }, { status: 500 });
     }
 
-    const formData = await req.formData();
-    const file = formData.get('file') as File;
-    if (!file) {
-      return NextResponse.json({ error: 'No se subió ningún archivo' }, { status: 400 });
-    }
+    let base64Data = '';
+    let mimeType = '';
 
-    // Convertir el archivo a base64
-    const bytes = await file.arrayBuffer();
-    const base64Data = Buffer.from(bytes).toString('base64');
-    const mimeType = file.type;
+    const contentType = req.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const body = await req.json();
+      const { fileUrl, mimeType: bodyMimeType } = body;
+      if (!fileUrl) {
+        return NextResponse.json({ error: 'Falta la URL del archivo (fileUrl)' }, { status: 400 });
+      }
+
+      // Descargar el archivo temporal desde Supabase Storage
+      const response = await fetch(fileUrl);
+      if (!response.ok) {
+        return NextResponse.json({ error: 'No se pudo descargar el archivo desde el almacenamiento' }, { status: 500 });
+      }
+      const arrayBuffer = await response.arrayBuffer();
+      base64Data = Buffer.from(arrayBuffer).toString('base64');
+      mimeType = bodyMimeType || response.headers.get('content-type') || 'application/octet-stream';
+    } else {
+      const formData = await req.formData();
+      const file = formData.get('file') as File;
+      if (!file) {
+        return NextResponse.json({ error: 'No se subió ningún archivo' }, { status: 400 });
+      }
+
+      // Convertir el archivo a base64
+      const bytes = await file.arrayBuffer();
+      base64Data = Buffer.from(bytes).toString('base64');
+      mimeType = file.type;
+    }
 
     // Inicializar el SDK de Gemini
     const genAI = new GoogleGenerativeAI(apiKey);

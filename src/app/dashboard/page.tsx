@@ -221,6 +221,25 @@ export default function Dashboard() {
     return publicUrl;
   };
 
+  // Subir el menú temporal de Onboarding a Supabase Storage
+  const handleUploadTempMenu = async (file: File | Blob) => {
+    const fileExt = menuFile?.name.split('.').pop() || 'jpg';
+    const fileName = `temp-menu-${Date.now()}.${fileExt}`;
+    const filePath = `products/${user.id}/${fileName}`;
+    
+    const { error: uploadError } = await supabase.storage
+      .from('restaurant-assets')
+      .upload(filePath, file, { upsert: true });
+    
+    if (uploadError) throw uploadError;
+    
+    const { data: { publicUrl } } = supabase.storage
+      .from('restaurant-assets')
+      .getPublicUrl(filePath);
+    
+    return publicUrl;
+  };
+
   // Onboarding: Ejecutar OCR / IA
   const handleAnalyzeMenu = async () => {
     if (!menuFile) return;
@@ -239,15 +258,18 @@ export default function Dashboard() {
         }
       }
 
-      const formData = new FormData();
-      formData.append('file', fileToSend);
+      setIaProgress('Subiendo archivo temporal a almacenamiento seguro...');
+      const fileUrl = await handleUploadTempMenu(fileToSend);
 
       setTimeout(() => setIaProgress('Gemini está analizando la estructura de tu menú...'), 2000);
       setTimeout(() => setIaProgress('Identificando platos, precios y organizando categorías...'), 4500);
 
       const res = await fetch('/api/parse-menu', {
         method: 'POST',
-        body: formData
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ fileUrl, mimeType: menuFile.type })
       });
 
       if (!res.ok) {
