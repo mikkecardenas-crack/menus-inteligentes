@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleAIFileManager } from '@google/generative-ai/server';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
 export async function POST(req: NextRequest) {
   try {
@@ -8,6 +12,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'GEMINI_API_KEY no está configurada' }, { status: 500 });
     }
 
+    let buffer: Buffer | null = null;
     let base64Data = '';
     let mimeType = '';
 
@@ -25,7 +30,8 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'No se pudo descargar el archivo desde el almacenamiento' }, { status: 500 });
       }
       const arrayBuffer = await response.arrayBuffer();
-      base64Data = Buffer.from(arrayBuffer).toString('base64');
+      buffer = Buffer.from(arrayBuffer);
+      base64Data = buffer.toString('base64');
       mimeType = bodyMimeType || response.headers.get('content-type') || 'application/octet-stream';
     } else {
       const formData = await req.formData();
@@ -36,7 +42,8 @@ export async function POST(req: NextRequest) {
 
       // Convertir el archivo a base64
       const bytes = await file.arrayBuffer();
-      base64Data = Buffer.from(bytes).toString('base64');
+      buffer = Buffer.from(bytes);
+      base64Data = buffer.toString('base64');
       mimeType = file.type;
     }
 
@@ -68,16 +75,66 @@ export async function POST(req: NextRequest) {
       No agregues texto explicativo antes ni después del JSON. Devuelve únicamente el JSON válido.
     `;
 
-    // Llamar a Gemini con la imagen/PDF
-    const result = await model.generateContent([
-      {
-        inlineData: {
-          data: base64Data,
-          mimeType: mimeType
+    let result;
+
+    if (mimeType === 'application/pdf') {
+      if (!buffer) {
+        return NextResponse.json({ error: 'No se pudo obtener el contenido del archivo PDF' }, { status: 400 });
+      }
+      // Para PDFs, usamos la File API de Gemini para evitar el error de mime type no soportado en inlineData
+      const fileManager = new GoogleAIFileManager(apiKey);
+      const tempDir = os.tmpdir();
+      const tempFilePath = path.join(tempDir, `menu_${Date.now()}.pdf`);
+      
+      // Escribir a archivo temporal en disco
+      fs.writeFileSync(tempFilePath, buffer);
+
+      try {
+        // Subir el archivo a Gemini File API
+        const uploadResult = await fileManager.uploadFile(tempFilePath, {
+          mimeType: 'application/pdf',
+          displayName: 'Menu PDF',
+        });
+
+        // Llamar a Gemini con el archivo de la File API
+        result = await model.generateContent([
+          {
+            fileData: {
+              fileUri: uploadResult.file.uri,
+              mimeType: uploadResult.file.mimeType
+            }
+          },
+          prompt
+        ]);
+
+        // Limpiar el archivo en Gemini File API después de generar el contenido
+        try {
+          await fileManager.deleteFile(uploadResult.file.name);
+        } catch (deleteError) {
+          console.error('Error al eliminar archivo en Gemini File API:', deleteError);
         }
-      },
-      prompt
-    ]);
+      } finally {
+        // Limpiar el archivo local temporal
+        try {
+          if (fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath);
+          }
+        } catch (unlinkError) {
+          console.error('Error al eliminar archivo local temporal:', unlinkError);
+        }
+      }
+    } else {
+      // Para imágenes, seguimos usando inlineData ya que es más rápido y son más livianas
+      result = await model.generateContent([
+        {
+          inlineData: {
+            data: base64Data,
+            mimeType: mimeType
+          }
+        },
+        prompt
+      ]);
+    }
 
     const response = await result.response;
     const responseText = response.text();
@@ -93,3 +150,4 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: error.message || 'Error al procesar el menú con IA' }, { status: 500 });
   }
 }
+
