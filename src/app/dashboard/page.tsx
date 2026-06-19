@@ -24,6 +24,56 @@ const THEMES = [
   { name: 'Negro Elegante', color: '#1A202C', label: '🍷 Ideal para Gourmet, Bistro, Vinos' }
 ];
 
+// Comprimir imágenes en el cliente para evitar pasar el límite de 4.5MB de Vercel
+const compressImage = (file: File, maxWidth = 1600, quality = 0.8): Promise<File> => {
+  return new Promise((resolve) => {
+    if (!file.type.startsWith('image/')) {
+      resolve(file);
+      return;
+    }
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(file);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const compressedFile = new File([blob], file.name, {
+              type: 'image/jpeg',
+              lastModified: Date.now(),
+            });
+            resolve(compressedFile);
+          } else {
+            resolve(file);
+          }
+        }, 'image/jpeg', quality);
+      };
+      img.onerror = () => resolve(file);
+    };
+    reader.onerror = () => resolve(file);
+  });
+};
+
 export default function Dashboard() {
   const router = useRouter();
   const supabase = createClient();
@@ -179,8 +229,18 @@ export default function Dashboard() {
     setIaProgress('Subiendo archivo y conectando con la IA de Gemini...');
 
     try {
+      let fileToSend: File | Blob = menuFile;
+      if (menuFile.type.startsWith('image/')) {
+        setIaProgress('Optimizando imagen para la IA...');
+        try {
+          fileToSend = await compressImage(menuFile);
+        } catch (e) {
+          console.error('Error al comprimir imagen:', e);
+        }
+      }
+
       const formData = new FormData();
-      formData.append('file', menuFile);
+      formData.append('file', fileToSend);
 
       setTimeout(() => setIaProgress('Gemini está analizando la estructura de tu menú...'), 2000);
       setTimeout(() => setIaProgress('Identificando platos, precios y organizando categorías...'), 4500);
@@ -190,8 +250,22 @@ export default function Dashboard() {
         body: formData
       });
 
+      if (!res.ok) {
+        let errMsg = 'No se pudo analizar el archivo';
+        try {
+          const errorData = await res.json();
+          errMsg = errorData.error || errMsg;
+        } catch (e) {
+          if (res.status === 413) {
+            errMsg = 'El archivo es demasiado grande para ser procesado por el servidor. Intenta recortar o reducir el peso de la imagen.';
+          } else {
+            errMsg = `Error del servidor (${res.status}): No se pudo procesar la carta.`;
+          }
+        }
+        throw new Error(errMsg);
+      }
+
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'No se pudo analizar la imagen');
 
       if (data.products && Array.isArray(data.products)) {
         setParsedProducts(data.products);
