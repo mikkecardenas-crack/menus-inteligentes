@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { getPlaceholderImage, STOCK_IMAGES } from '@/lib/stockImages';
+import { buildProductDescription, extractProductCustomization } from '@/lib/productCustomization';
 import { 
   Store, Package, Settings, QrCode, Plus, Pencil, Trash2, 
   Eye, Copy, Phone, Palette, Check, LogOut, Upload, Loader2,
@@ -23,6 +24,25 @@ const THEMES = [
   { name: 'Azul Bistro', color: '#3182CE', label: '🍣 Ideal para Mariscos, Sushi, Heladerías' },
   { name: 'Negro Elegante', color: '#1A202C', label: '🍷 Ideal para Gourmet, Bistro, Vinos' }
 ];
+
+const getStoredMenuCoverSettings = (slug: string) => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(`menu_cover_settings_${slug}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+
+const saveStoredMenuCoverSettings = (slug: string, payload: Record<string, string>) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(`menu_cover_settings_${slug}`, JSON.stringify(payload));
+  } catch {
+    // noop
+  }
+};
 
 // Comprimir imágenes en el cliente para evitar pasar el límite de 4.5MB de Vercel
 const compressImage = (file: File, maxWidth = 1600, quality = 0.8): Promise<File> => {
@@ -107,6 +127,9 @@ export default function Dashboard() {
   // Form de agregar/editar producto
   const [prodName, setProdName] = useState('');
   const [prodDesc, setProdDesc] = useState('');
+  const [prodCustomizationTitle, setProdCustomizationTitle] = useState('');
+  const [prodCustomizationDescription, setProdCustomizationDescription] = useState('');
+  const [prodCustomizationGroups, setProdCustomizationGroups] = useState<any[]>([]);
   const [prodPrice, setProdPrice] = useState(0);
   const [prodCategory, setProdCategory] = useState('');
   const [prodAvailable, setProdAvailable] = useState(true);
@@ -153,7 +176,17 @@ export default function Dashboard() {
         .maybeSingle();
 
       if (prof) {
-        setProfile(prof);
+        const storedCover = getStoredMenuCoverSettings(prof.slug || '');
+        const profileWithCover = storedCover
+          ? {
+              ...prof,
+              menu_cover_image_url: prof.menu_cover_image_url || storedCover.menu_cover_image_url || '',
+              menu_cover_title: prof.menu_cover_title || storedCover.menu_cover_title || '',
+              menu_cover_description: prof.menu_cover_description || storedCover.menu_cover_description || '',
+            }
+          : prof;
+
+        setProfile(profileWithCover);
         const { data: prods } = await supabase
           .from('products')
           .select('*')
@@ -393,21 +426,138 @@ export default function Dashboard() {
   // Dashboard: Guardar Ajustes del restaurante
   const handleSaveSettings = async () => {
     try {
+      const payload = {
+        name: profile.name,
+        whatsapp: profile.whatsapp,
+        primary_color: profile.primary_color,
+        is_open: profile.is_open,
+        menu_cover_image_url: profile.menu_cover_image_url || '',
+        menu_cover_title: profile.menu_cover_title || '',
+        menu_cover_description: profile.menu_cover_description || '',
+      };
+
       const { error } = await supabase
         .from('profiles')
-        .update({
-          name: profile.name,
-          whatsapp: profile.whatsapp,
-          primary_color: profile.primary_color,
-          is_open: profile.is_open
-        })
+        .update(payload)
         .eq('id', user.id);
 
-      if (error) throw error;
+      if (error) {
+        if (error.code === '42703' || error.message?.includes('column')) {
+          saveStoredMenuCoverSettings(profile.slug || '', {
+            menu_cover_image_url: payload.menu_cover_image_url,
+            menu_cover_title: payload.menu_cover_title,
+            menu_cover_description: payload.menu_cover_description,
+          });
+          alert('Configuración guardada localmente para tu navegador. Si quieres que se sincronice en todos los dispositivos, agrega las columnas de portada en la base de datos.');
+          return;
+        }
+        throw error;
+      }
+
+      saveStoredMenuCoverSettings(profile.slug || '', {
+        menu_cover_image_url: payload.menu_cover_image_url,
+        menu_cover_title: payload.menu_cover_title,
+        menu_cover_description: payload.menu_cover_description,
+      });
       alert('Configuración guardada correctamente.');
     } catch (err: any) {
       alert('Error al guardar ajustes: ' + err.message);
     }
+  };
+
+  const createCustomizationGroup = () => ({
+    id: `group-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    label: '',
+    description: '',
+    required: true,
+    minSelections: 1,
+    maxSelections: 1,
+    options: [{
+      id: `option-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      label: '',
+    }],
+  });
+
+  const addCustomizationGroup = () => {
+    setProdCustomizationGroups(prev => [...prev, createCustomizationGroup()]);
+  };
+
+  const removeCustomizationGroup = (groupId: string) => {
+    setProdCustomizationGroups(prev => prev.filter(group => group.id !== groupId));
+  };
+
+  const addCustomizationOption = (groupId: string) => {
+    setProdCustomizationGroups(prev => prev.map(group => {
+      if (group.id !== groupId) return group;
+      return {
+        ...group,
+        options: [...group.options, {
+          id: `option-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          label: '',
+        }],
+      };
+    }));
+  };
+
+  const removeCustomizationOption = (groupId: string, optionId: string) => {
+    setProdCustomizationGroups(prev => prev.map((group: any) => {
+      if (group.id !== groupId) return group;
+      const nextOptions = (group.options || []).filter((option: any) => option.id !== optionId);
+      return { ...group, options: nextOptions.length > 0 ? nextOptions : [{ id: `option-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, label: '' }] };
+    }));
+  };
+
+  const buildCustomizationConfigFromState = () => {
+    const groups = prodCustomizationGroups
+      .map(group => ({
+        id: group.id,
+        label: group.label.trim(),
+        description: group.description.trim(),
+        required: group.required,
+        minSelections: Number(group.minSelections) || 1,
+        maxSelections: Number(group.maxSelections) || 1,
+        options: group.options
+          .map((option: any) => ({
+            id: option.id,
+            label: String(option.label || '').trim(),
+          }))
+          .filter((option: any) => option.label),
+      }))
+      .filter(group => group.label || group.options.length > 0);
+
+    if (groups.length === 0) {
+      return null;
+    }
+
+    return {
+      title: prodCustomizationTitle.trim(),
+      description: prodCustomizationDescription.trim(),
+      groups,
+    };
+  };
+
+  const hydrateCustomizationState = (config: any) => {
+    if (!config || !Array.isArray(config.groups) || config.groups.length === 0) {
+      setProdCustomizationTitle('');
+      setProdCustomizationDescription('');
+      setProdCustomizationGroups([]);
+      return;
+    }
+
+    setProdCustomizationTitle(config.title || '');
+    setProdCustomizationDescription(config.description || '');
+    setProdCustomizationGroups(config.groups.map((group: any) => ({
+      id: group.id || `group-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      label: group.label || '',
+      description: group.description || '',
+      required: Boolean(group.required),
+      minSelections: Number(group.minSelections) || (group.required ? 1 : 0),
+      maxSelections: Number(group.maxSelections) || Math.max(1, (group.options || []).length || 1),
+      options: (group.options || []).map((option: any) => ({
+        id: option.id || `option-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        label: option.label || '',
+      })),
+    })));
   };
 
   // Dashboard: Agregar/Editar Producto
@@ -425,12 +575,15 @@ export default function Dashboard() {
         final_image_url = selectedStockUrl;
       }
 
+      const customizationConfig = buildCustomizationConfigFromState();
+      const finalDescription = buildProductDescription(prodDesc, customizationConfig);
+
       if (editingProduct) {
         const { error } = await supabase
           .from('products')
           .update({
             name: prodName,
-            description: prodDesc,
+            description: finalDescription,
             price: prodPrice,
             category: prodCategory,
             available: prodAvailable,
@@ -445,7 +598,7 @@ export default function Dashboard() {
           .insert({
             restaurant_id: user.id,
             name: prodName,
-            description: prodDesc,
+            description: finalDescription,
             price: prodPrice,
             category: prodCategory,
             available: prodAvailable,
@@ -1224,6 +1377,9 @@ export default function Dashboard() {
                       setEditingProduct(null);
                       setProdName('');
                       setProdDesc('');
+                      setProdCustomizationTitle('');
+                      setProdCustomizationDescription('');
+                      setProdCustomizationGroups([]);
                       setProdPrice(0);
                       setProdCategory(orderedCategories[0] || 'Platos');
                       setProdAvailable(true);
@@ -1281,9 +1437,13 @@ export default function Dashboard() {
                               <div className="flex gap-1">
                                 <button 
                                   onClick={() => {
+                                    const customization = extractProductCustomization(p.description);
                                     setEditingProduct(p);
                                     setProdName(p.name);
-                                    setProdDesc(p.description || '');
+                                    setProdDesc(customization.cleanDescription || '');
+                                    setProdCustomizationTitle(customization.config?.title || '');
+                                    setProdCustomizationDescription(customization.config?.description || '');
+                                    hydrateCustomizationState(customization.config);
                                     setProdPrice(p.price);
                                     setProdCategory(p.category);
                                     setProdAvailable(p.available);
@@ -1418,6 +1578,41 @@ export default function Dashboard() {
                   />
                 </div>
 
+                <div className="space-y-3 rounded-2xl border border-slate-850 bg-slate-950/70 p-4">
+                  <div>
+                    <h5 className="text-sm font-bold text-white">Portada del menú</h5>
+                    <p className="text-xs text-slate-500">Define la imagen, texto y botón que verán tus clientes al entrar al menú.</p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-300 block mb-2">Imagen de portada (URL)</label>
+                    <Input
+                      value={profile.menu_cover_image_url || ''}
+                      onChange={(e) => setProfile({ ...profile, menu_cover_image_url: e.target.value })}
+                      placeholder="https://..."
+                      className="bg-slate-950 border-slate-850 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-300 block mb-2">Título de portada</label>
+                    <Input
+                      value={profile.menu_cover_title || ''}
+                      onChange={(e) => setProfile({ ...profile, menu_cover_title: e.target.value })}
+                      placeholder="Ej: Pizzas artesanales"
+                      className="bg-slate-950 border-slate-850 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-300 block mb-2">Descripción de portada</label>
+                    <textarea
+                      value={profile.menu_cover_description || ''}
+                      onChange={(e) => setProfile({ ...profile, menu_cover_description: e.target.value })}
+                      placeholder="Describe lo que vende tu restaurante"
+                      className="w-full bg-slate-950 border border-slate-850 p-3 rounded-xl text-sm focus:outline-none focus:border-orange-500 text-white h-20 resize-none"
+                    />
+                  </div>
+                  
+                </div>
+
                 <div className="flex items-center justify-between p-4 bg-slate-950 border border-slate-850 rounded-xl">
                   <div>
                     <h5 className="text-sm font-bold">Estado de atención</h5>
@@ -1548,6 +1743,174 @@ export default function Dashboard() {
                 placeholder="Ingredientes o descripción..."
                 className="w-full bg-slate-900 border border-slate-850 p-3 rounded-xl text-sm focus:outline-none focus:border-orange-500 text-white h-20 resize-none"
               />
+            </div>
+
+            <div className="space-y-3 rounded-2xl border border-slate-850 bg-slate-900/50 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-0.5">Opciones de personalización</label>
+                  <p className="text-[11px] text-slate-500">Define sabores, toppings o características para este producto.</p>
+                </div>
+                <Button
+                  type="button"
+                  onClick={addCustomizationGroup}
+                  className="bg-slate-950 border border-slate-800 text-white text-[10px] font-bold cursor-pointer"
+                >
+                  + Agregar grupo
+                </Button>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-300 block mb-1">Título general</label>
+                <Input
+                  value={prodCustomizationTitle}
+                  onChange={(e) => setProdCustomizationTitle(e.target.value)}
+                  placeholder="Ej: Elige tus sabores"
+                  className="bg-slate-950 border-slate-850 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-300 block mb-1">Descripción general</label>
+                <textarea
+                  value={prodCustomizationDescription}
+                  onChange={(e) => setProdCustomizationDescription(e.target.value)}
+                  placeholder="Ej: Selecciona hasta 2 sabores para tu pizza."
+                  className="w-full bg-slate-950 border border-slate-850 p-3 rounded-xl text-sm focus:outline-none focus:border-orange-500 text-white h-20 resize-none"
+                />
+              </div>
+
+              {prodCustomizationGroups.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-800 bg-slate-950/60 p-4 text-center text-[11px] text-slate-500">
+                  Aún no agregas grupos de personalización. Haz clic en “Agregar grupo”.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {prodCustomizationGroups.map((group, groupIndex) => (
+                    <div key={group.id} className="rounded-xl border border-slate-850 bg-slate-950/70 p-3 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wide text-orange-400">Grupo {groupIndex + 1}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeCustomizationGroup(group.id)}
+                          className="text-[10px] text-red-400 hover:text-red-300 font-bold cursor-pointer"
+                        >
+                          Eliminar grupo
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-[10px] font-semibold text-slate-300 block mb-1">Nombre</label>
+                          <Input
+                            value={group.label}
+                            onChange={(e) => setProdCustomizationGroups(prev => prev.map(item => item.id === group.id ? { ...item, label: e.target.value } : item))}
+                            placeholder="Ej: Sabores"
+                            className="bg-slate-900 border-slate-850 text-white"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between p-2 bg-slate-900 border border-slate-850 rounded-xl">
+                          <div>
+                            <p className="text-[10px] font-bold text-white">Obligatorio</p>
+                            <p className="text-[9px] text-slate-500">Requerido</p>
+                          </div>
+                          <Switch
+                            checked={group.required}
+                            onCheckedChange={(checked) => setProdCustomizationGroups(prev => prev.map(item => item.id === group.id ? { ...item, required: checked } : item))}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between p-2 bg-slate-900 border border-slate-850 rounded-xl">
+                          <div>
+                            <p className="text-[10px] font-bold text-white">Permitir selección múltiple</p>
+                            <p className="text-[9px] text-slate-500">Activa para elegir varios</p>
+                          </div>
+                          <Switch
+                            checked={Number(group.maxSelections || 1) > 1}
+                            onCheckedChange={(checked) => setProdCustomizationGroups(prev => prev.map(item => {
+                              if (item.id !== group.id) return item;
+                              return {
+                                ...item,
+                                maxSelections: checked ? Math.max(2, Number(item.maxSelections || 2)) : 1,
+                                minSelections: checked ? Math.max(1, Number(item.minSelections || 1)) : Math.min(1, Number(item.minSelections || 1)),
+                              };
+                            }))}
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-semibold text-slate-300 block mb-1">Descripción del grupo</label>
+                        <Input
+                          value={group.description}
+                          onChange={(e) => setProdCustomizationGroups(prev => prev.map(item => item.id === group.id ? { ...item, description: e.target.value } : item))}
+                          placeholder="Ej: Elige 2 sabores para la pizza"
+                          className="bg-slate-900 border-slate-850 text-white"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] font-semibold text-slate-300 block mb-1">Min.</label>
+                          <Input
+                            type="number"
+                            min={0}
+                            value={group.minSelections}
+                            onChange={(e) => setProdCustomizationGroups(prev => prev.map(item => item.id === group.id ? { ...item, minSelections: Number(e.target.value) || 0 } : item))}
+                            className="bg-slate-900 border-slate-850 text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-semibold text-slate-300 block mb-1">Max.</label>
+                          <Input
+                            type="number"
+                            min={1}
+                            value={group.maxSelections}
+                            onChange={(e) => setProdCustomizationGroups(prev => prev.map(item => item.id === group.id ? { ...item, maxSelections: Number(e.target.value) || 1 } : item))}
+                            className="bg-slate-900 border-slate-850 text-white"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold uppercase text-slate-400">Opciones</span>
+                          <Button
+                            type="button"
+                            onClick={() => addCustomizationOption(group.id)}
+                            className="bg-slate-950 border border-slate-800 text-[10px] font-bold text-white cursor-pointer"
+                          >
+                            + Agregar opción
+                          </Button>
+                        </div>
+
+                        {(group.options || []).map((option: any, optionIndex: number) => (
+                          <div key={option.id} className="flex items-center gap-2">
+                            <Input
+                              value={option.label}
+                              onChange={(e) => setProdCustomizationGroups(prev => prev.map((item: any) => {
+                                if (item.id !== group.id) return item;
+                                return {
+                                  ...item,
+                                  options: (item.options || []).map((opt: any) => opt.id === option.id ? { ...opt, label: e.target.value } : opt),
+                                };
+                              }))}
+                              placeholder={`Opción ${optionIndex + 1}`}
+                              className="bg-slate-900 border-slate-850 text-white flex-1"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeCustomizationOption(group.id, option.id)}
+                              className="text-[10px] text-red-400 hover:text-red-300 font-bold cursor-pointer"
+                            >
+                              Eliminar
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-4">

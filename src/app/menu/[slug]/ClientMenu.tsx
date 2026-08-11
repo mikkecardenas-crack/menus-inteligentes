@@ -3,8 +3,9 @@
 import { useState, useEffect } from 'react';
 import { 
   ShoppingCart, Plus, Minus, ChevronRight, MapPin, 
-  UtensilsCrossed, Store, User, MessageCircle, Trash2, ShieldAlert
+  UtensilsCrossed, Store, User, MessageCircle, Trash2, ShieldAlert, Sparkles
 } from 'lucide-react';
+import { extractProductCustomization } from '@/lib/productCustomization';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -18,15 +19,19 @@ interface CartItem {
   product: any;
   quantity: number;
   notes: string;
+  customization?: any;
 }
 
 type DeliveryType = 'delivery' | 'table' | 'pickup';
 type CheckoutStep = 'cart' | 'name' | 'delivery-type' | 'delivery-details' | 'table' | 'confirm';
 
-export default function ClientMenu({ profile, initialProducts }: ClientMenuProps) {
+export default function ClientMenu({ profile: initialProfile, initialProducts }: ClientMenuProps) {
+  const [menuProfile, setMenuProfile] = useState(initialProfile);
   const [activeCategory, setActiveCategory] = useState('');
   const [selectedProduct, setSelectedProduct] = useState<any | null>(null);
   const [productNotes, setProductNotes] = useState('');
+  const [selectedCustomization, setSelectedCustomization] = useState<any>({});
+  const [customizationError, setCustomizationError] = useState('');
 
   // Estados del carrito
   const [items, setItems] = useState<CartItem[]>([]);
@@ -42,12 +47,35 @@ export default function ClientMenu({ profile, initialProducts }: ClientMenuProps
   });
   const [tableNumber, setTableNumber] = useState('');
 
+  const profile = menuProfile || initialProfile;
+
   const rawCategories = Array.from(new Set(initialProducts.map(p => p.category)));
   const savedOrder = profile.category_order || [];
   const categories = [
     ...savedOrder.filter((c: string) => rawCategories.includes(c)),
     ...rawCategories.filter((c: string) => !savedOrder.includes(c))
   ];
+
+  useEffect(() => {
+    const syncProfileFromStorage = () => {
+      if (typeof window === 'undefined' || !initialProfile?.slug) return;
+      try {
+        const stored = window.localStorage.getItem(`menu_cover_settings_${initialProfile.slug}`);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          setMenuProfile({ ...initialProfile, ...parsed });
+          return;
+        }
+      } catch {
+        // ignore
+      }
+      setMenuProfile(initialProfile);
+    };
+
+    syncProfileFromStorage();
+    window.addEventListener('storage', syncProfileFromStorage);
+    return () => window.removeEventListener('storage', syncProfileFromStorage);
+  }, [initialProfile]);
 
   // Cargar carrito de sessionStorage al montar (evita errores de hidratación de SSR)
   useEffect(() => {
@@ -75,17 +103,17 @@ export default function ClientMenu({ profile, initialProducts }: ClientMenuProps
     }
   }, [categories, activeCategory]);
 
-  const addToCart = (product: any, notes = '') => {
+  const addToCart = (product: any, notes = '', customization: any = null) => {
     setItems(prev => {
       const existing = prev.find(item => item.product.id === product.id);
       if (existing) {
         return prev.map(item =>
           item.product.id === product.id
-            ? { ...item, quantity: item.quantity + 1 }
+            ? { ...item, quantity: item.quantity + 1, customization: customization || item.customization }
             : item
         );
       }
-      return [...prev, { product, quantity: 1, notes }];
+      return [...prev, { product, quantity: 1, notes, customization }];
     });
   };
 
@@ -114,11 +142,120 @@ export default function ClientMenu({ profile, initialProducts }: ClientMenuProps
     return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(price);
   };
 
+  const getCustomizationConfig = (product: any) => {
+    return extractProductCustomization(product?.description).config;
+  };
+
+  const getDefaultCustomizationSelection = (config: any) => {
+    if (!config?.groups?.length) return {};
+    return config.groups.reduce((acc: Record<string, string[]>, group: any) => {
+      acc[group.id] = [];
+      return acc;
+    }, {});
+  };
+
+  const validateCustomizationSelection = (config: any, selection: Record<string, string[]>) => {
+    if (!config?.groups?.length) return true;
+
+    for (const group of config.groups) {
+      const selected = selection[group.id] || [];
+      if (group.required && selected.length < (group.minSelections || 1)) {
+        return false;
+      }
+      if (selected.length > (group.maxSelections || selected.length)) {
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  const getCustomizationSummaryText = (customization: any) => {
+    if (!customization?.groups?.length) return '';
+    return customization.groups
+      .filter((group: any) => (group.values || []).length > 0)
+      .map((group: any) => `${group.label}: ${group.values.join(', ')}`)
+      .join(' • ');
+  };
+
+  const handleSelectProduct = (product: any) => {
+    const config = getCustomizationConfig(product);
+    setSelectedProduct(product);
+    if (config?.groups?.length) {
+      setSelectedCustomization({
+        [product.id]: getDefaultCustomizationSelection(config),
+      });
+    } else {
+      setSelectedCustomization({});
+    }
+    setCustomizationError('');
+    setProductNotes('');
+  };
+
+  const handleToggleOption = (groupId: string, optionId: string) => {
+    if (!selectedProduct) return;
+    const config = getCustomizationConfig(selectedProduct);
+    const group = config?.groups?.find((item: any) => item.id === groupId);
+    if (!group) return;
+
+    const currentSelection = selectedCustomization[selectedProduct.id] || {};
+    const currentValues = currentSelection[groupId] || [];
+    const max = Number(group.maxSelections) || 0;
+    const isMultiple = max > 1;
+
+    let nextValues: string[] = [];
+    if (isMultiple) {
+      if (currentValues.includes(optionId)) {
+        nextValues = currentValues.filter((id: string) => id !== optionId);
+      } else if (max === 0 || currentValues.length < max) {
+        nextValues = [...currentValues, optionId];
+      } else {
+        // reached limit, do nothing
+        nextValues = currentValues;
+        return; // ignore extra selection
+      }
+    } else {
+      nextValues = currentValues.includes(optionId) ? [] : [optionId];
+    }
+
+    setSelectedCustomization((prev: any) => ({
+      ...prev,
+      [selectedProduct.id]: {
+        ...prev[selectedProduct.id],
+        [groupId]: nextValues,
+      },
+    }));
+    setCustomizationError('');
+  };
+
   const handleAddProduct = () => {
     if (selectedProduct) {
-      addToCart(selectedProduct, productNotes);
+      const config = getCustomizationConfig(selectedProduct);
+      const currentSelection = selectedCustomization[selectedProduct.id] || {};
+      if (config?.groups?.length && !validateCustomizationSelection(config, currentSelection)) {
+        setCustomizationError('Completa las opciones requeridas para este producto.');
+        return;
+      }
+
+      const customizationPayload = config?.groups?.length
+        ? {
+            title: config.title || 'Opciones',
+            description: config.description || '',
+            groups: config.groups.map((group: any) => ({
+              ...group,
+              values: (currentSelection[group.id] || []).map((optionId: string) => {
+                const option = group.options.find((item: any) => item.id === optionId);
+                return option?.label || optionId;
+              }),
+            })),
+          }
+        : null;
+
+      addToCart(selectedProduct, productNotes, customizationPayload);
       setSelectedProduct(null);
       setProductNotes('');
+      setSelectedCustomization({});
+      setCustomizationError('');
     }
   };
 
@@ -160,6 +297,8 @@ export default function ClientMenu({ profile, initialProducts }: ClientMenuProps
     items.forEach(item => {
       message += `• ${item.quantity}x ${item.product.name} - ${formatPrice(item.product.price * item.quantity)}\n`;
       if (item.notes) message += `   _"${item.notes}"_\n`;
+      const summary = getCustomizationSummaryText(item.customization);
+      if (summary) message += `   _${summary}_\n`;
     });
     
     message += `\n💰 *TOTAL: ${formatPrice(total)}*\n\n`;
@@ -238,6 +377,33 @@ export default function ClientMenu({ profile, initialProducts }: ClientMenuProps
         </div>
       </header>
 
+      <section className="relative overflow-hidden border-b border-slate-900">
+        <div className="absolute inset-0 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950" />
+        {profile.menu_cover_image_url ? (
+          <img src={profile.menu_cover_image_url} alt="Portada del menú" className="absolute inset-0 w-full h-full object-cover opacity-40" />
+        ) : null}
+        <div className="relative max-w-2xl mx-auto px-4 py-16 sm:py-20 flex flex-col items-start gap-4 text-left">
+          <div className="flex items-center gap-3 rounded-full border border-white/20 bg-black/25 px-3 py-2 backdrop-blur-sm">
+            {profile.logo_url ? (
+              <img src={profile.logo_url} alt="Logo del restaurante" className="w-10 h-10 rounded-full object-cover border border-white/30" />
+            ) : (
+              <div className="w-10 h-10 rounded-full bg-white/20 border border-white/30 flex items-center justify-center font-bold text-sm">
+                {profile.name.charAt(0).toUpperCase()}
+              </div>
+            )}
+            <span className="text-sm font-semibold text-white/90">{profile.name}</span>
+          </div>
+          <div className="space-y-3 max-w-xl">
+            <h2 className="text-3xl sm:text-4xl font-black tracking-tight text-white">
+              {profile.menu_cover_title || 'Disfruta de nuestro menú'}
+            </h2>
+            <p className="text-sm sm:text-base text-slate-200/90 leading-6">
+              {profile.menu_cover_description || 'Explora nuestros platos, personaliza tus favoritos y envía tu pedido directo por WhatsApp.'}
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* Categories Horizontal Slider */}
       <div className="sticky top-[89px] z-40 bg-slate-950/90 backdrop-blur-md border-b border-slate-900 py-3 shadow-md">
         <div className="max-w-2xl mx-auto px-4">
@@ -309,7 +475,7 @@ export default function ClientMenu({ profile, initialProducts }: ClientMenuProps
                       </div>
                     ) : (
                       <button 
-                        onClick={() => setSelectedProduct(product)}
+                        onClick={() => handleSelectProduct(product)}
                         className="w-8 h-8 rounded-full text-white flex items-center justify-center shadow-lg transition-transform hover:scale-110 cursor-pointer"
                         style={{ backgroundColor: profile.primary_color }}
                       >
@@ -362,6 +528,61 @@ export default function ClientMenu({ profile, initialProducts }: ClientMenuProps
                   <p className="text-slate-400 text-xs mt-1">{selectedProduct.description}</p>
                   <p className="text-lg font-extrabold mt-2" style={{ color: profile.primary_color }}>{formatPrice(selectedProduct.price)}</p>
                 </div>
+                {(() => {
+                  const config = getCustomizationConfig(selectedProduct);
+                  if (!config?.groups?.length) return null;
+                  return (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                        <Sparkles className="w-4 h-4" style={{ color: profile.primary_color }} />
+                        {config.title || 'Personaliza tu pedido'}
+                      </div>
+                      {config.description ? <p className="text-[11px] text-slate-400">{config.description}</p> : null}
+                      <div className="space-y-2">
+                        {config.groups.map((group: any) => {
+                          const currentSelection = (selectedCustomization[selectedProduct.id] || {})[group.id] || [];
+                          const isSingle = (group.maxSelections || 1) === 1;
+                          return (
+                            <div key={group.id} className="rounded-xl border border-slate-850 bg-slate-900/80 p-3">
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <p className="text-xs font-bold text-white">{group.label}</p>
+                                  {group.description ? <p className="text-[10px] text-slate-500 mt-1">{group.description}</p> : null}
+                                </div>
+                                <span className="text-[10px] text-slate-500">
+                                  {group.required ? 'Obligatorio' : 'Opcional'}
+                                </span>
+                              </div>
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {group.options.map((option: any) => {
+                                  const selected = currentSelection.includes(option.id);
+                                  const disabled = !selected && group.maxSelections && currentSelection.length >= Number(group.maxSelections);
+                                  return (
+                                    <button
+                                      key={option.id}
+                                      type="button"
+                                      onClick={() => handleToggleOption(group.id, option.id)}
+                                      disabled={disabled}
+                                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${selected ? 'text-white border-transparent' : 'border-slate-800 text-slate-300 bg-slate-950'} ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
+                                      style={selected ? { backgroundColor: profile.primary_color } : {}}
+                                    >
+                                      {option.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              {isSingle ? null : (
+                                <p className="mt-2 text-[10px] text-slate-500">
+                                  Selecciona hasta {group.maxSelections || 'varias'} opciones.
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div>
                   <label className="text-xs font-semibold text-slate-350 block mb-1">Notas u Observaciones (opcional)</label>
                   <Input 
@@ -371,6 +592,7 @@ export default function ClientMenu({ profile, initialProducts }: ClientMenuProps
                     className="bg-slate-900 border-slate-850 text-white"
                   />
                 </div>
+                {customizationError ? <p className="text-xs text-red-400">{customizationError}</p> : null}
                 <Button 
                   onClick={handleAddProduct}
                   className="w-full text-white font-bold py-6 cursor-pointer"
@@ -404,6 +626,9 @@ export default function ClientMenu({ profile, initialProducts }: ClientMenuProps
                     <div className="flex-1 min-w-0">
                       <h4 className="font-bold text-sm text-white truncate">{item.product.name}</h4>
                       {item.notes && <p className="text-[10px] text-slate-400 italic mt-0.5">"{item.notes}"</p>}
+                      {item.customization?.groups?.length ? (
+                        <p className="text-[10px] text-slate-400 mt-1">{item.customization.groups.map((group: any) => `${group.label}: ${group.values.join(', ')}`).join(' • ')}</p>
+                      ) : null}
                       <div className="flex items-center justify-between mt-2">
                         <div className="flex items-center gap-2 bg-slate-950 border border-slate-850 rounded-full px-1 py-0.5">
                           <button onClick={() => updateQuantity(item.product.id, item.quantity - 1)} className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-white">
@@ -649,8 +874,13 @@ export default function ClientMenu({ profile, initialProducts }: ClientMenuProps
               
               <div className="border-t border-slate-900 pt-3 space-y-2 max-h-[25vh] overflow-y-auto pr-1 scrollbar-hide">
                 {items.map(item => (
-                  <div key={item.product.id} className="flex justify-between text-xs text-slate-300">
-                    <span>{item.quantity}x {item.product.name}</span>
+                  <div key={item.product.id} className="flex justify-between text-xs text-slate-300 gap-2">
+                    <div className="text-left">
+                      <span>{item.quantity}x {item.product.name}</span>
+                      {item.customization?.groups?.length ? (
+                        <p className="text-[10px] text-slate-500 mt-1">{item.customization.groups.map((group: any) => `${group.label}: ${group.values.join(', ')}`).join(' • ')}</p>
+                      ) : null}
+                    </div>
                     <span className="font-bold">{formatPrice(item.product.price * item.quantity)}</span>
                   </div>
                 ))}

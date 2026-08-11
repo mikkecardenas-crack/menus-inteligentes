@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-// This endpoint is called automatically by Vercel Cron every 3 days
-// to prevent Supabase free-tier from pausing due to inactivity.
 export async function GET() {
   try {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -31,6 +29,7 @@ export async function GET() {
       timestamp: now,
       profiles: count,
       message: 'Supabase is alive and healthy ✅',
+      uptime: 'healthy',
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
