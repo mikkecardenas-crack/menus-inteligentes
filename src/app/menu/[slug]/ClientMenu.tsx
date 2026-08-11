@@ -63,6 +63,10 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
         const stored = window.localStorage.getItem(`menu_cover_settings_${initialProfile.slug}`);
         if (stored) {
           const parsed = JSON.parse(stored);
+          // Remove legacy keys that should no longer override profile
+          if (parsed && typeof parsed === 'object') {
+            delete parsed.menu_cover_button_label;
+          }
           setMenuProfile({ ...initialProfile, ...parsed });
           return;
         }
