@@ -45,14 +45,20 @@ export default async function MenuPage({ params }: { params: Promise<{ slug: str
     .from('products')
     .select(`
       *,
-      customization_groups (
-        *,
-        customization_items (*)
+      product_customization_groups (
+        id,
+        display_order,
+        customization_groups (
+          id, name, description, required, min_selections, max_selections,
+          customization_options (id, label, price, display_order)
+        )
+      ),
+      customization_rules (
+        id, trigger_group_id, trigger_option_id, target_group_id, effect_type, effect_value
       )
     `)
     .eq('restaurant_id', profile.id)
     .eq('available', true)
-    .order('category', { ascending: true })
     .order('display_order', { ascending: true });
 
   return <ClientMenu profile={profile} initialProducts={products || []} />;

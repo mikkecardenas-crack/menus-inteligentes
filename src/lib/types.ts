@@ -71,3 +71,18 @@ export interface LegacyCustomizationConfig {
   description?: string;
   groups: LegacyCustomizationGroup[];
 }
+
+// ================================================================
+// Reglas condicionales entre grupos
+// Ejemplo: Si Tamaño=Grande → Sabores máx_selecciones=3
+// ================================================================
+export interface CustomizationRule {
+  id: string;
+  product_id: string;
+  trigger_group_id: string;   // grupo que activa la regla (ej: Tamaño)
+  trigger_option_id: string;  // opción específica que activa (ej: Grande)
+  target_group_id: string;    // grupo afectado por la regla (ej: Sabores)
+  effect_type: 'set_max' | 'set_min' | 'show' | 'hide';
+  effect_value: number;       // valor del efecto (ej: 3 para máx=3)
+  display_order: number;
+}

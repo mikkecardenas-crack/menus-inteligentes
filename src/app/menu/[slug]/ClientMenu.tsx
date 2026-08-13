@@ -20,6 +20,7 @@ interface CartItem {
   quantity: number;
   notes: string;
   customization?: any;
+  unitPrice?: number; // precio calculado incluyendo extras de opciones seleccionadas
 }
 
 type DeliveryType = 'delivery' | 'table' | 'pickup';
@@ -97,7 +98,7 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
     }
   }, [categories, activeCategory]);
 
-  const addToCart = (product: any, notes = '', customization: any = null) => {
+  const addToCart = (product: any, notes = '', customization: any = null, unitPrice?: number) => {
     setItems(prev => {
       const existing = prev.find(item => item.product.id === product.id);
       if (existing) {
@@ -107,7 +108,7 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
             : item
         );
       }
-      return [...prev, { product, quantity: 1, notes, customization }];
+      return [...prev, { product, quantity: 1, notes, customization, unitPrice }];
     });
   };
 
@@ -129,41 +130,116 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
 
   const clearCart = () => setItems([]);
 
-  const total = items.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
+  const total = items.reduce((sum, item) => sum + (item.unitPrice ?? item.product.price) * item.quantity, 0);
   const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
 
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(price);
   };
 
-  const getCustomizationConfig = (product: any) => {
-    return extractProductCustomization(product?.description).config;
+  // ─── Helpers de personalización global ────────────────────────────────────
+
+  /**
+   * Lee los grupos de personalización de un producto.
+   * Primero intenta el sistema nuevo (product_customization_groups → customization_groups → customization_options).
+   * Si no hay datos, hace fallback al formato legado embebido en description.
+   */
+  const getProductGroupsData = (product: any): any[] => {
+    const links = product?.product_customization_groups || [];
+    if (links.length > 0) {
+      return [...links]
+        .sort((a: any, b: any) => (a.display_order || 0) - (b.display_order || 0))
+        .map((link: any) => link.customization_groups)
+        .filter(Boolean)
+        .map((group: any) => ({
+          ...group,
+          options: [...(group.customization_options || [])].sort(
+            (a: any, b: any) => (a.display_order || 0) - (b.display_order || 0)
+          ),
+        }));
+    }
+    // Fallback: sistema legado embebido en description
+    const config = extractProductCustomization(product?.description).config;
+    if (config?.groups?.length) {
+      return config.groups.map((g: any) => ({
+        id: g.id,
+        name: g.label,
+        description: g.description || '',
+        required: g.required || false,
+        min_selections: g.minSelections || 0,
+        max_selections: g.maxSelections || 1,
+        options: (g.options || []).map((o: any) => ({
+          id: o.id,
+          label: o.label,
+          price: o.price || 0,
+          display_order: 0,
+        })),
+      }));
+    }
+    return [];
   };
 
-  const getDefaultCustomizationSelection = (config: any) => {
-    if (!config?.groups?.length) return {};
-    return config.groups.reduce((acc: Record<string, string[]>, group: any) => {
-      acc[group.id] = [];
-      return acc;
-    }, {});
-  };
+  /** Obtiene las reglas condicionales del producto (del sistema nuevo) */
+  const getProductRules = (product: any): any[] => product?.customization_rules || [];
 
-  const validateCustomizationSelection = (config: any, selection: Record<string, string[]>) => {
-    if (!config?.groups?.length) return true;
-
-    for (const group of config.groups) {
-      const selected = selection[group.id] || [];
-      if (group.required && selected.length < (group.minSelections || 1)) {
-        return false;
-      }
-      if (selected.length > (group.maxSelections || selected.length)) {
-        return false;
+  /**
+   * Motor de reglas condicionales.
+   * Retorna overrides por groupId: { effectiveMax, effectiveMin, hidden }.
+   * Ejemplo: Si Tamaño=Grande está seleccionado → Sabores.effectiveMax = 3
+   */
+  const applyConditionalRules = (
+    rules: any[],
+    selection: Record<string, string[]>
+  ): Record<string, { effectiveMax?: number; effectiveMin?: number; hidden?: boolean }> => {
+    const overrides: Record<string, { effectiveMax?: number; effectiveMin?: number; hidden?: boolean }> = {};
+    for (const rule of rules) {
+      const selectedInTrigger = selection[rule.trigger_group_id] || [];
+      if (selectedInTrigger.includes(rule.trigger_option_id)) {
+        if (!overrides[rule.target_group_id]) overrides[rule.target_group_id] = {};
+        if (rule.effect_type === 'set_max') {
+          overrides[rule.target_group_id].effectiveMax = rule.effect_value;
+        } else if (rule.effect_type === 'set_min') {
+          overrides[rule.target_group_id].effectiveMin = rule.effect_value;
+        } else if (rule.effect_type === 'hide') {
+          overrides[rule.target_group_id].hidden = true;
+        } else if (rule.effect_type === 'show') {
+          overrides[rule.target_group_id].hidden = false;
+        }
       }
     }
-
-    return true;
+    return overrides;
   };
 
+  /** Calcula el precio total: precio base del producto + suma de precios de opciones seleccionadas */
+  const calculateDynamicPrice = (
+    product: any,
+    groups: any[],
+    selection: Record<string, string[]>
+  ): number => {
+    let runningTotal = Number(product.price) || 0;
+    for (const group of groups) {
+      for (const optId of selection[group.id] || []) {
+        const opt = group.options?.find((o: any) => o.id === optId);
+        if (opt?.price) runningTotal += Number(opt.price);
+      }
+    }
+    return runningTotal;
+  };
+
+  /** Construye el resumen de selecciones para el carrito y mensaje de WhatsApp */
+  const buildCustomizationSummary = (groups: any[], selection: Record<string, string[]>): any => ({
+    groups: groups
+      .filter(g => (selection[g.id] || []).length > 0)
+      .map(g => ({
+        label: g.name,
+        values: (selection[g.id] || []).map((optId: string) => {
+          const opt = g.options?.find((o: any) => o.id === optId);
+          return opt?.label || optId;
+        }),
+      })),
+  });
+
+  /** Mantener compatibilidad: resumen de texto para WhatsApp */
   const getCustomizationSummaryText = (customization: any) => {
     if (!customization?.groups?.length) return '';
     return customization.groups
@@ -173,84 +249,94 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
   };
 
   const handleSelectProduct = (product: any) => {
-    const config = getCustomizationConfig(product);
+    const groups = getProductGroupsData(product);
     setSelectedProduct(product);
-    if (config?.groups?.length) {
-      setSelectedCustomization({
-        [product.id]: getDefaultCustomizationSelection(config),
-      });
-    } else {
-      setSelectedCustomization({});
-    }
+    const initialSelection = groups.reduce((acc: Record<string, string[]>, group: any) => {
+      acc[group.id] = [];
+      return acc;
+    }, {});
+    setSelectedCustomization({ [product.id]: initialSelection });
     setCustomizationError('');
     setProductNotes('');
   };
 
   const handleToggleOption = (groupId: string, optionId: string) => {
     if (!selectedProduct) return;
-    const config = getCustomizationConfig(selectedProduct);
-    const group = config?.groups?.find((item: any) => item.id === groupId);
+    const groups = getProductGroupsData(selectedProduct);
+    const rules = getProductRules(selectedProduct);
+    const group = groups.find((g: any) => g.id === groupId);
     if (!group) return;
 
-    const currentSelection = selectedCustomization[selectedProduct.id] || {};
-    const currentValues = currentSelection[groupId] || [];
-    const max = Number(group.maxSelections) || 0;
-    const isMultiple = max > 1;
+    const currentProductSelection = selectedCustomization[selectedProduct.id] || {};
+    const currentValues = currentProductSelection[groupId] || [];
 
-    let nextValues: string[] = [];
+    // Aplicar reglas para saber el máximo efectivo de este grupo
+    const ruleOverrides = applyConditionalRules(rules, currentProductSelection);
+    const effectiveMax = ruleOverrides[groupId]?.effectiveMax ?? group.max_selections ?? 1;
+    const isMultiple = effectiveMax > 1;
+
+    let nextValues: string[];
     if (isMultiple) {
       if (currentValues.includes(optionId)) {
         nextValues = currentValues.filter((id: string) => id !== optionId);
-      } else if (max === 0 || currentValues.length < max) {
+      } else if (currentValues.length < effectiveMax) {
         nextValues = [...currentValues, optionId];
       } else {
-        // reached limit, do nothing
-        nextValues = currentValues;
-        return; // ignore extra selection
+        return; // límite alcanzado
       }
     } else {
+      // Selección única: conmutar (si ya estaba seleccionado, deseleccionar)
       nextValues = currentValues.includes(optionId) ? [] : [optionId];
+    }
+
+    const newProductSelection: Record<string, string[]> = { ...currentProductSelection, [groupId]: nextValues };
+
+    // Al cambiar la selección en el grupo trigger, recortar automáticamente
+    // las selecciones en grupos target si ahora exceden el nuevo máximo
+    const newOverrides = applyConditionalRules(rules, newProductSelection);
+    for (const [targetId, override] of Object.entries(newOverrides)) {
+      if (override.effectiveMax !== undefined) {
+        const targetValues = newProductSelection[targetId] || [];
+        if (targetValues.length > override.effectiveMax) {
+          newProductSelection[targetId] = targetValues.slice(0, override.effectiveMax);
+        }
+      }
     }
 
     setSelectedCustomization((prev: any) => ({
       ...prev,
-      [selectedProduct.id]: {
-        ...prev[selectedProduct.id],
-        [groupId]: nextValues,
-      },
+      [selectedProduct.id]: newProductSelection,
     }));
     setCustomizationError('');
   };
 
   const handleAddProduct = () => {
-    if (selectedProduct) {
-      const config = getCustomizationConfig(selectedProduct);
-      const currentSelection = selectedCustomization[selectedProduct.id] || {};
-      if (config?.groups?.length && !validateCustomizationSelection(config, currentSelection)) {
-        setCustomizationError('Completa las opciones requeridas para este producto.');
+    if (!selectedProduct) return;
+    const groups = getProductGroupsData(selectedProduct);
+    const rules = getProductRules(selectedProduct);
+    const currentSelection = selectedCustomization[selectedProduct.id] || {};
+    const ruleOverrides = applyConditionalRules(rules, currentSelection);
+
+    // Validar grupos obligatorios
+    for (const group of groups) {
+      const override = ruleOverrides[group.id] || {};
+      if (override.hidden) continue;
+      const effectiveMin = override.effectiveMin ?? group.min_selections ?? 0;
+      const selected = currentSelection[group.id] || [];
+      if ((group.required || effectiveMin > 0) && selected.length < Math.max(effectiveMin, 1)) {
+        setCustomizationError(`Por favor selecciona al menos una opción en "${group.name}".`);
         return;
       }
-
-      const customizationPayload = config?.groups?.length
-        ? {
-            title: config.title || 'Opciones',
-            description: config.description || '',
-            groups: config.groups.map((group: any) => ({
-              ...group,
-              values: (currentSelection[group.id] || []).map((optionId: string) => {
-                const option = group.options.find((item: any) => item.id === optionId);
-                return option?.label || optionId;
-              }),
-            })),
-          }
-        : null;
-
-      addToCart(selectedProduct, productNotes, customizationPayload);
-      setSelectedProduct(null);
-      setProductNotes('');
-      setSelectedCustomization({});
-      setCustomizationError('');
     }
+
+    const dynamicPrice = calculateDynamicPrice(selectedProduct, groups, currentSelection);
+    const customizationPayload = buildCustomizationSummary(groups, currentSelection);
+
+    addToCart(selectedProduct, productNotes, customizationPayload, dynamicPrice);
+    setSelectedProduct(null);
+    setProductNotes('');
+    setSelectedCustomization({});
+    setCustomizationError('');
   };
 
   const startCheckout = () => {
@@ -289,7 +375,8 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
     message += `📦 *Productos:*\n`;
     
     items.forEach(item => {
-      message += `• ${item.quantity}x ${item.product.name} - ${formatPrice(item.product.price * item.quantity)}\n`;
+      const itemUnitPrice = item.unitPrice ?? item.product.price;
+      message += `• ${item.quantity}x ${item.product.name} - ${formatPrice(itemUnitPrice * item.quantity)}\n`;
       if (item.notes) message += `   _"${item.notes}"_\n`;
       const summary = getCustomizationSummaryText(item.customization);
       if (summary) message += `   _${summary}_\n`;
@@ -523,57 +610,93 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
                   <p className="text-lg font-extrabold mt-2" style={{ color: profile.primary_color }}>{formatPrice(selectedProduct.price)}</p>
                 </div>
                 {(() => {
-                  const config = getCustomizationConfig(selectedProduct);
-                  if (!config?.groups?.length) return null;
+                  const groups = getProductGroupsData(selectedProduct);
+                  const rules = getProductRules(selectedProduct);
+                  if (!groups.length) return null;
+                  const currentSelection = selectedCustomization[selectedProduct.id] || {};
+                  const ruleOverrides = applyConditionalRules(rules, currentSelection);
+                  const dynamicPrice = calculateDynamicPrice(selectedProduct, groups, currentSelection);
+                  const hasExtras = dynamicPrice > Number(selectedProduct.price);
                   return (
                     <div className="space-y-3">
                       <div className="flex items-center gap-2 text-sm font-semibold text-white">
                         <Sparkles className="w-4 h-4" style={{ color: profile.primary_color }} />
-                        {config.title || 'Personaliza tu pedido'}
+                        Personaliza tu pedido
                       </div>
-                      {config.description ? <p className="text-[11px] text-slate-400">{config.description}</p> : null}
                       <div className="space-y-2">
-                        {config.groups.map((group: any) => {
-                          const currentSelection = (selectedCustomization[selectedProduct.id] || {})[group.id] || [];
-                          const isSingle = (group.maxSelections || 1) === 1;
+                        {groups.map((group: any) => {
+                          const override = ruleOverrides[group.id] || {};
+                          if (override.hidden) return null;
+                          const effectiveMax = override.effectiveMax ?? group.max_selections ?? 1;
+                          const currentValues = currentSelection[group.id] || [];
+                          const isSingle = effectiveMax === 1;
+                          const remaining = Math.max(0, effectiveMax - currentValues.length);
                           return (
                             <div key={group.id} className="rounded-xl border border-slate-850 bg-slate-900/80 p-3">
-                              <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-start justify-between gap-2 mb-2">
                                 <div>
-                                  <p className="text-xs font-bold text-white">{group.label}</p>
-                                  {group.description ? <p className="text-[10px] text-slate-500 mt-1">{group.description}</p> : null}
+                                  <p className="text-xs font-bold text-white">{group.name}</p>
+                                  {group.description ? <p className="text-[10px] text-slate-500 mt-0.5">{group.description}</p> : null}
                                 </div>
-                                <span className="text-[10px] text-slate-500">
-                                  {group.required ? 'Obligatorio' : 'Opcional'}
-                                </span>
+                                <div className="text-right flex-shrink-0 space-y-0.5">
+                                  <div>
+                                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={group.required ? { backgroundColor: `${profile.primary_color}25`, color: profile.primary_color } : { backgroundColor: '#1e293b', color: '#64748b' }}>
+                                      {group.required ? 'Obligatorio' : 'Opcional'}
+                                    </span>
+                                  </div>
+                                  {!isSingle && (
+                                    <p className="text-[10px] text-slate-500">
+                                      {currentValues.length}/{effectiveMax}{remaining > 0 ? ` · faltan ${remaining}` : ' ✓'}
+                                    </p>
+                                  )}
+                                </div>
                               </div>
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                {group.options.map((option: any) => {
-                                  const selected = currentSelection.includes(option.id);
-                                  const disabled = !selected && group.maxSelections && currentSelection.length >= Number(group.maxSelections);
+                              <div className="flex flex-wrap gap-2">
+                                {(group.options || []).map((option: any) => {
+                                  const selected = currentValues.includes(option.id);
+                                  const atLimit = !selected && currentValues.length >= effectiveMax;
                                   return (
                                     <button
                                       key={option.id}
                                       type="button"
                                       onClick={() => handleToggleOption(group.id, option.id)}
-                                      disabled={disabled}
-                                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${selected ? 'text-white border-transparent' : 'border-slate-800 text-slate-300 bg-slate-950'} ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
+                                      disabled={atLimit}
+                                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                                        selected
+                                          ? 'text-white border-transparent shadow-sm'
+                                          : 'border-slate-800 text-slate-300 bg-slate-950'
+                                      } ${atLimit ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`}
                                       style={selected ? { backgroundColor: profile.primary_color } : {}}
                                     >
                                       {option.label}
+                                      {Number(option.price) > 0 && (
+                                        <span className={`text-[10px] font-bold ${selected ? 'text-white/70' : 'text-slate-500'}`}>
+                                          +{formatPrice(Number(option.price))}
+                                        </span>
+                                      )}
                                     </button>
                                   );
                                 })}
                               </div>
-                              {isSingle ? null : (
-                                <p className="mt-2 text-[10px] text-slate-500">
-                                  Selecciona hasta {group.maxSelections || 'varias'} opciones.
-                                </p>
-                              )}
                             </div>
                           );
                         })}
                       </div>
+                      {/* Precio dinámico: actualiza en tiempo real cuando hay opciones con costo adicional */}
+                      {hasExtras && (
+                        <div className="flex items-center justify-between p-3 rounded-xl border transition-all" style={{ backgroundColor: `${profile.primary_color}10`, borderColor: `${profile.primary_color}30` }}>
+                          <div>
+                            <p className="text-[10px] text-slate-400">Precio base</p>
+                            <p className="text-xs line-through text-slate-600">{formatPrice(selectedProduct.price)}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-[10px] text-slate-400">Total con extras</p>
+                            <p className="font-extrabold text-base" style={{ color: profile.primary_color }}>
+                              {formatPrice(dynamicPrice)}
+                            </p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })()}

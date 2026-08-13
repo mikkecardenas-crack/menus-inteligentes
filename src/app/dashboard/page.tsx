@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client';
 import { getPlaceholderImage, STOCK_IMAGES } from '@/lib/stockImages';
 import { buildProductDescription, extractProductCustomization } from '@/lib/productCustomization';
 import { migrateEmbeddedCustomizations, isMigrationDone, markMigrationDone } from '@/lib/migrateCustomizations';
-import type { CustomizationGroup, CustomizationOption } from '@/lib/types';
+import type { CustomizationGroup, CustomizationOption, CustomizationRule } from '@/lib/types';
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent
 } from '@dnd-kit/core';
@@ -307,6 +307,23 @@ export default function Dashboard() {
   const [groupSaving, setGroupSaving] = useState(false);
   const [groupError, setGroupError] = useState<string | null>(null);
 
+  // ─── Sistema de Reglas Condicionales (pizzas, productos complejos) ────────────
+  // Reglas del producto que se está editando actualmente
+  const [productRules, setProductRules] = useState<CustomizationRule[]>([]);
+
+  // Mapa: groupId → nombres de platos que lo usan (para mostrar "Usado en X platos")
+  const [groupUsageMap, setGroupUsageMap] = useState<Record<string, string[]>>({});
+
+  // Búsqueda de grupos en el editor de producto
+  const [groupSearch, setGroupSearch] = useState('');
+
+  // Form para agregar una nueva regla
+  const [newRuleTriggerGroupId, setNewRuleTriggerGroupId] = useState('');
+  const [newRuleTriggerOptionId, setNewRuleTriggerOptionId] = useState('');
+  const [newRuleTargetGroupId, setNewRuleTargetGroupId] = useState('');
+  const [newRuleEffectType, setNewRuleEffectType] = useState<'set_max' | 'set_min'>('set_max');
+  const [newRuleEffectValue, setNewRuleEffectValue] = useState(1);
+
   // dnd-kit sensors
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -345,21 +362,22 @@ export default function Dashboard() {
             .order('display_order', { ascending: true }),
         ]);
 
-        const loadedProducts = prods || [];
-        setProducts(loadedProducts);
+        let activeProducts = prods || [];
+        setProducts(activeProducts);
         setCustomizationGroups(groups || []);
 
         // Migración automática (una sola vez)
-        if (!isMigrationDone() && loadedProducts.some((p: any) => p.description?.includes('__MENU_CUSTOMIZATION__'))) {
+        if (!isMigrationDone() && activeProducts.some((p: any) => p.description?.includes('__MENU_CUSTOMIZATION__'))) {
           setMigrating(true);
           try {
-            await migrateEmbeddedCustomizations(supabase, session.user.id, loadedProducts);
+            await migrateEmbeddedCustomizations(supabase, session.user.id, activeProducts);
             // Recargar datos migrados
             const [{ data: freshProds }, { data: freshGroups }] = await Promise.all([
               supabase.from('products').select('*').eq('restaurant_id', session.user.id).order('category', { ascending: true }),
               supabase.from('customization_groups').select('*, options:customization_options(*)').eq('restaurant_id', session.user.id).order('display_order', { ascending: true }),
             ]);
-            setProducts(freshProds || []);
+            activeProducts = freshProds || [];
+            setProducts(activeProducts);
             setCustomizationGroups(freshGroups || []);
           } catch (e) {
             console.error('Error en migración:', e);
@@ -368,6 +386,23 @@ export default function Dashboard() {
             setMigrating(false);
           }
         }
+
+        // Construir mapa de uso de grupos por producto
+        const { data: allLinks } = await supabase
+          .from('product_customization_groups')
+          .select('group_id, product_id');
+        const usageMap: Record<string, string[]> = {};
+        const prods2 = activeProducts;
+        for (const link of allLinks || []) {
+          const prod = prods2.find((p: any) => p.id === link.product_id);
+          if (prod) {
+            if (!usageMap[link.group_id]) usageMap[link.group_id] = [];
+            if (!usageMap[link.group_id].includes(prod.name)) {
+              usageMap[link.group_id].push(prod.name);
+            }
+          }
+        }
+        setGroupUsageMap(usageMap);
       }
       setLoading(false);
     };
@@ -639,6 +674,19 @@ export default function Dashboard() {
       setSelectedGroupIds([]);
     }
     setIsAddingProduct(true);
+    // Cargar reglas del producto en edición
+    if (product) {
+      loadProductRules(product.id);
+    } else {
+      setProductRules([]);
+    }
+    // Resetear form de nueva regla
+    setNewRuleTriggerGroupId('');
+    setNewRuleTriggerOptionId('');
+    setNewRuleTargetGroupId('');
+    setNewRuleEffectType('set_max');
+    setNewRuleEffectValue(1);
+    setGroupSearch('');
   };
 
   const loadProductGroupLinks = async (productId: string) => {
@@ -647,6 +695,47 @@ export default function Dashboard() {
       .select('group_id')
       .eq('product_id', productId);
     setSelectedGroupIds((data || []).map((r: any) => r.group_id));
+  };
+
+  /** Carga las reglas condicionales del producto siendo editado */
+  const loadProductRules = async (productId: string) => {
+    const { data } = await supabase
+      .from('customization_rules')
+      .select('*')
+      .eq('product_id', productId)
+      .order('display_order', { ascending: true });
+    setProductRules((data || []) as CustomizationRule[]);
+  };
+
+  /** Agrega una nueva regla al estado local (se guarda al guardar el producto) */
+  const handleAddProductRule = () => {
+    if (!newRuleTriggerGroupId || !newRuleTriggerOptionId || !newRuleTargetGroupId) {
+      alert('Selecciona el grupo de activación, la opción y el grupo objetivo.');
+      return;
+    }
+    if (newRuleTriggerGroupId === newRuleTargetGroupId) {
+      alert('El grupo de activación y el grupo objetivo no pueden ser el mismo.');
+      return;
+    }
+    const newRule: CustomizationRule = {
+      id: `new-${Date.now()}`,
+      product_id: editingProduct?.id || '',
+      trigger_group_id: newRuleTriggerGroupId,
+      trigger_option_id: newRuleTriggerOptionId,
+      target_group_id: newRuleTargetGroupId,
+      effect_type: newRuleEffectType,
+      effect_value: newRuleEffectValue,
+      display_order: productRules.length,
+    };
+    setProductRules(prev => [...prev, newRule]);
+    setNewRuleTriggerGroupId('');
+    setNewRuleTriggerOptionId('');
+    setNewRuleTargetGroupId('');
+    setNewRuleEffectValue(1);
+  };
+
+  const handleRemoveProductRule = (ruleId: string) => {
+    setProductRules(prev => prev.filter(r => r.id !== ruleId));
   };
 
   const handleSaveProduct = async (e: React.FormEvent) => {
@@ -687,6 +776,23 @@ export default function Dashboard() {
               product_id: productId,
               group_id: gid,
               is_copy: false,
+              display_order: idx,
+            }))
+          );
+        }
+
+        // Sincronizar reglas condicionales
+        await supabase.from('customization_rules').delete().eq('product_id', productId);
+        const validRules = productRules.filter(r => r.trigger_group_id && r.trigger_option_id && r.target_group_id);
+        if (validRules.length > 0) {
+          await supabase.from('customization_rules').insert(
+            validRules.map((r, idx) => ({
+              product_id: productId,
+              trigger_group_id: r.trigger_group_id,
+              trigger_option_id: r.trigger_option_id,
+              target_group_id: r.target_group_id,
+              effect_type: r.effect_type,
+              effect_value: r.effect_value,
               display_order: idx,
             }))
           );
@@ -867,8 +973,50 @@ export default function Dashboard() {
       const { error } = await supabase.from('customization_groups').delete().eq('id', groupId);
       if (error) throw error;
       setCustomizationGroups(customizationGroups.filter(g => g.id !== groupId));
+      // Actualizar mapa de uso
+      setGroupUsageMap(prev => { const next = { ...prev }; delete next[groupId]; return next; });
     } catch (err: any) {
       alert('Error al eliminar: ' + err.message);
+    }
+  };
+
+  /** Duplica un grupo global con todas sus opciones (sin vincular a ningún plato) */
+  const handleDuplicateGroup = async (group: CustomizationGroup) => {
+    if (!confirm(`¿Duplicar el grupo "${group.name}"? Se creará una copia independiente sin vincular a ningún plato.`)) return;
+    try {
+      const { data: newGroup, error } = await supabase.from('customization_groups').insert({
+        restaurant_id: user.id,
+        name: `Copia de ${group.name}`,
+        description: group.description,
+        required: group.required,
+        min_selections: group.min_selections,
+        max_selections: group.max_selections,
+        display_order: customizationGroups.length,
+      }).select('id').single();
+      if (error) throw error;
+
+      // Copiar opciones del grupo original
+      const opts = group.options || [];
+      if (opts.length > 0) {
+        await supabase.from('customization_options').insert(
+          opts.map((o: any, idx: number) => ({
+            group_id: newGroup.id,
+            label: o.label,
+            price: o.price || 0,
+            display_order: idx,
+          }))
+        );
+      }
+
+      // Recargar grupos
+      const { data: freshGroups } = await supabase
+        .from('customization_groups')
+        .select('*, options:customization_options(*)')
+        .eq('restaurant_id', user.id)
+        .order('display_order', { ascending: true });
+      setCustomizationGroups(freshGroups || []);
+    } catch (err: any) {
+      alert('Error al duplicar grupo: ' + err.message);
     }
   };
 
