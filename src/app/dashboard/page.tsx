@@ -1663,6 +1663,10 @@ export default function Dashboard() {
                               className="p-2 rounded-lg bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-850 cursor-pointer" title="Editar grupo">
                               <Pencil className="w-4 h-4" />
                             </button>
+                            <button onClick={() => handleDuplicateGroup(group)}
+                              className="p-2 rounded-lg bg-slate-950 text-amber-400 hover:text-amber-300 hover:bg-slate-850 cursor-pointer" title="Duplicar grupo">
+                              <CopyPlus className="w-4 h-4" />
+                            </button>
                             <button onClick={() => handleDeleteGroup(group.id)}
                               className="p-2 rounded-lg bg-slate-950 text-red-400 hover:text-red-300 hover:bg-slate-850 cursor-pointer" title="Eliminar grupo">
                               <Trash2 className="w-4 h-4" />
@@ -1987,7 +1991,7 @@ export default function Dashboard() {
             {/* Opciones */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase text-slate-400">Opciones</span>
+                <span className="text-xs font-bold uppercase text-slate-400">Opciones ({groupOptions.length})</span>
                 <button type="button"
                   onClick={() => setGroupOptions(prev => [...prev, { id: `new-${Date.now()}`, label: '', price: 0 }])}
                   className="text-[10px] text-orange-400 hover:text-orange-300 font-bold cursor-pointer">
@@ -1995,30 +1999,33 @@ export default function Dashboard() {
                 </button>
               </div>
 
-              {groupOptions.map((opt, idx) => (
-                <div key={opt.id} className="flex items-center gap-2">
-                  <Input
-                    value={opt.label}
-                    onChange={(e) => setGroupOptions(prev => prev.map((o, i) => i === idx ? { ...o, label: e.target.value } : o))}
-                    placeholder={`Opción ${idx + 1}`}
-                    className="bg-slate-900 border-slate-850 text-white flex-1"
-                  />
-                  <div className="relative w-28">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs">$</span>
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                {groupOptions.map((opt, idx) => (
+                  <div key={opt.id} className="flex items-center gap-2">
                     <Input
-                      type="number"
-                      min={0}
-                      value={opt.price}
-                      onChange={(e) => setGroupOptions(prev => prev.map((o, i) => i === idx ? { ...o, price: Number(e.target.value) || 0 } : o))}
-                      placeholder="0"
-                      className="bg-slate-900 border-slate-850 text-white pl-6"
+                      value={opt.label}
+                      onChange={(e) => setGroupOptions(prev => prev.map((o, i) => i === idx ? { ...o, label: e.target.value } : o))}
+                      placeholder={`Opción ${idx + 1}`}
+                      className="bg-slate-900 border-slate-850 text-white flex-1 text-xs"
                     />
+                    <div className="relative w-28">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs">$</span>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={opt.price}
+                        onChange={(e) => setGroupOptions(prev => prev.map((o, i) => i === idx ? { ...o, price: Number(e.target.value) || 0 } : o))}
+                        placeholder="0"
+                        className="bg-slate-900 border-slate-850 text-white pl-6 text-xs"
+                      />
+                    </div>
+                    <button type="button"
+                      onClick={() => setGroupOptions(prev => prev.filter((_, i) => i !== idx))}
+                      className="p-1.5 text-red-400 hover:text-red-300 text-xs font-bold cursor-pointer"
+                      title="Eliminar opción">✕</button>
                   </div>
-                  <button type="button"
-                    onClick={() => setGroupOptions(prev => prev.filter((_, i) => i !== idx))}
-                    className="text-red-400 hover:text-red-300 text-xs font-bold cursor-pointer">✕</button>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
 
             <div className="flex gap-3 pt-2">

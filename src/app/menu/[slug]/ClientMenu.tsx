@@ -595,35 +595,37 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
         </div>
       )}
 
-      {/* DIALOG AGREGAR NOTAS AL PRODUCTO */}
+      {/* DIALOG AGREGAR NOTAS AL PRODUCTO Y PERSONALIZACIÓN */}
       <Dialog open={!!selectedProduct} onOpenChange={() => setSelectedProduct(null)}>
-        <DialogContent className="max-w-sm bg-slate-950 border border-slate-850 text-white p-0 overflow-hidden">
-          {selectedProduct && (
-            <>
-              {selectedProduct.image_url && selectedProduct.image_url.trim() !== '' && selectedProduct.image_url !== 'null' && (
-                <img src={selectedProduct.image_url} alt={selectedProduct.name} className="w-full h-48 object-cover" />
-              )}
-              <div className="p-5 space-y-4 text-left">
-                <div>
-                  <h2 className="text-lg font-bold text-white">{selectedProduct.name}</h2>
-                  <p className="text-slate-400 text-xs mt-1">{selectedProduct.description}</p>
-                  <p className="text-lg font-extrabold mt-2" style={{ color: profile.primary_color }}>{formatPrice(selectedProduct.price)}</p>
-                </div>
-                {(() => {
-                  const groups = getProductGroupsData(selectedProduct);
-                  const rules = getProductRules(selectedProduct);
-                  if (!groups.length) return null;
-                  const currentSelection = selectedCustomization[selectedProduct.id] || {};
-                  const ruleOverrides = applyConditionalRules(rules, currentSelection);
-                  const dynamicPrice = calculateDynamicPrice(selectedProduct, groups, currentSelection);
-                  const hasExtras = dynamicPrice > Number(selectedProduct.price);
-                  return (
+        <DialogContent className="max-w-md w-[95vw] sm:w-full max-h-[85vh] sm:max-h-[90vh] flex flex-col bg-slate-950 border border-slate-850 text-white p-0 overflow-hidden rounded-2xl shadow-2xl">
+          {selectedProduct && (() => {
+            const groups = getProductGroupsData(selectedProduct);
+            const rules = getProductRules(selectedProduct);
+            const currentSelection = selectedCustomization[selectedProduct.id] || {};
+            const ruleOverrides = applyConditionalRules(rules, currentSelection);
+            const dynamicPrice = calculateDynamicPrice(selectedProduct, groups, currentSelection);
+            const hasExtras = dynamicPrice > Number(selectedProduct.price);
+
+            return (
+              <>
+                {/* Contenido scrolleable para grupos con muchas opciones */}
+                <div className="flex-1 overflow-y-auto p-5 space-y-4 text-left overscroll-contain">
+                  {selectedProduct.image_url && selectedProduct.image_url.trim() !== '' && selectedProduct.image_url !== 'null' && (
+                    <img src={selectedProduct.image_url} alt={selectedProduct.name} className="w-full h-48 object-cover rounded-xl mb-3" />
+                  )}
+                  <div>
+                    <h2 className="text-lg font-bold text-white">{selectedProduct.name}</h2>
+                    <p className="text-slate-400 text-xs mt-1">{selectedProduct.description}</p>
+                    <p className="text-lg font-extrabold mt-2" style={{ color: profile.primary_color }}>{formatPrice(selectedProduct.price)}</p>
+                  </div>
+
+                  {groups.length > 0 && (
                     <div className="space-y-3">
                       <div className="flex items-center gap-2 text-sm font-semibold text-white">
                         <Sparkles className="w-4 h-4" style={{ color: profile.primary_color }} />
                         Personaliza tu pedido
                       </div>
-                      <div className="space-y-2">
+                      <div className="space-y-3">
                         {groups.map((group: any) => {
                           const override = ruleOverrides[group.id] || {};
                           if (override.hidden) return null;
@@ -632,8 +634,8 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
                           const isSingle = effectiveMax === 1;
                           const remaining = Math.max(0, effectiveMax - currentValues.length);
                           return (
-                            <div key={group.id} className="rounded-xl border border-slate-850 bg-slate-900/80 p-3">
-                              <div className="flex items-start justify-between gap-2 mb-2">
+                            <div key={group.id} className="rounded-xl border border-slate-850 bg-slate-900/80 p-3.5 space-y-2.5">
+                              <div className="flex items-start justify-between gap-2">
                                 <div>
                                   <p className="text-xs font-bold text-white">{group.name}</p>
                                   {group.description ? <p className="text-[10px] text-slate-500 mt-0.5">{group.description}</p> : null}
@@ -645,13 +647,13 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
                                     </span>
                                   </div>
                                   {!isSingle && (
-                                    <p className="text-[10px] text-slate-500">
+                                    <p className="text-[10px] text-slate-400 font-medium">
                                       {currentValues.length}/{effectiveMax}{remaining > 0 ? ` · faltan ${remaining}` : ' ✓'}
                                     </p>
                                   )}
                                 </div>
                               </div>
-                              <div className="flex flex-wrap gap-2">
+                              <div className="flex flex-wrap gap-2 max-h-64 overflow-y-auto pr-1 py-0.5">
                                 {(group.options || []).map((option: any) => {
                                   const selected = currentValues.includes(option.id);
                                   const atLimit = !selected && currentValues.length >= effectiveMax;
@@ -661,16 +663,16 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
                                       type="button"
                                       onClick={() => handleToggleOption(group.id, option.id)}
                                       disabled={atLimit}
-                                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                                      className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-all flex items-center gap-1.5 ${
                                         selected
-                                          ? 'text-white border-transparent shadow-sm'
-                                          : 'border-slate-800 text-slate-300 bg-slate-950'
+                                          ? 'text-white border-transparent shadow-md scale-[1.02]'
+                                          : 'border-slate-800 text-slate-300 bg-slate-950 hover:border-slate-700'
                                       } ${atLimit ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`}
                                       style={selected ? { backgroundColor: profile.primary_color } : {}}
                                     >
                                       {option.label}
                                       {Number(option.price) > 0 && (
-                                        <span className={`text-[10px] font-bold ${selected ? 'text-white/70' : 'text-slate-500'}`}>
+                                        <span className={`text-[10px] font-bold ${selected ? 'text-white/80' : 'text-slate-500'}`}>
                                           +{formatPrice(Number(option.price))}
                                         </span>
                                       )}
@@ -682,44 +684,45 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
                           );
                         })}
                       </div>
-                      {/* Precio dinámico: actualiza en tiempo real cuando hay opciones con costo adicional */}
-                      {hasExtras && (
-                        <div className="flex items-center justify-between p-3 rounded-xl border transition-all" style={{ backgroundColor: `${profile.primary_color}10`, borderColor: `${profile.primary_color}30` }}>
-                          <div>
-                            <p className="text-[10px] text-slate-400">Precio base</p>
-                            <p className="text-xs line-through text-slate-600">{formatPrice(selectedProduct.price)}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-[10px] text-slate-400">Total con extras</p>
-                            <p className="font-extrabold text-base" style={{ color: profile.primary_color }}>
-                              {formatPrice(dynamicPrice)}
-                            </p>
-                          </div>
-                        </div>
-                      )}
                     </div>
-                  );
-                })()}
-                <div>
-                  <label className="text-xs font-semibold text-slate-350 block mb-1">Notas u Observaciones (opcional)</label>
-                  <Input 
-                    value={productNotes}
-                    onChange={(e) => setProductNotes(e.target.value)}
-                    placeholder="Ej: Sin cebolla, salsas aparte..."
-                    className="bg-slate-900 border-slate-850 text-white"
-                  />
+                  )}
+
+                  <div>
+                    <label className="text-xs font-semibold text-slate-350 block mb-1">Notas u Observaciones (opcional)</label>
+                    <Input 
+                      value={productNotes}
+                      onChange={(e) => setProductNotes(e.target.value)}
+                      placeholder="Ej: Sin cebolla, salsas aparte..."
+                      className="bg-slate-900 border-slate-850 text-white text-xs"
+                    />
+                  </div>
+
+                  {customizationError ? (
+                    <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400 font-medium">
+                      {customizationError}
+                    </div>
+                  ) : null}
                 </div>
-                {customizationError ? <p className="text-xs text-red-400">{customizationError}</p> : null}
-                <Button 
-                  onClick={handleAddProduct}
-                  className="w-full text-white font-bold py-6 cursor-pointer"
-                  style={{ backgroundColor: profile.primary_color }}
-                >
-                  Agregar al pedido
-                </Button>
-              </div>
-            </>
-          )}
+
+                {/* Footer fijo con total y botón de agregar */}
+                <div className="p-4 border-t border-slate-850 bg-slate-950/95 backdrop-blur flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] text-slate-400">Total a pagar</p>
+                    <p className="font-extrabold text-base" style={{ color: profile.primary_color }}>
+                      {formatPrice(dynamicPrice)}
+                    </p>
+                  </div>
+                  <Button 
+                    onClick={handleAddProduct}
+                    className="flex-1 text-white font-bold py-5 cursor-pointer shadow-lg"
+                    style={{ backgroundColor: profile.primary_color }}
+                  >
+                    Agregar al pedido
+                  </Button>
+                </div>
+              </>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 
