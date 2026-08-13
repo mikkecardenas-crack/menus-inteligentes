@@ -43,10 +43,17 @@ export default async function MenuPage({ params }: { params: Promise<{ slug: str
 
   const { data: products } = await supabase
     .from('products')
-    .select('*')
+    .select(`
+      *,
+      customization_groups (
+        *,
+        customization_items (*)
+      )
+    `)
     .eq('restaurant_id', profile.id)
     .eq('available', true)
-    .order('category', { ascending: true });
+    .order('category', { ascending: true })
+    .order('display_order', { ascending: true });
 
   return <ClientMenu profile={profile} initialProducts={products || []} />;
 }

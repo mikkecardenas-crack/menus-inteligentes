@@ -1,15 +1,25 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { getPlaceholderImage, STOCK_IMAGES } from '@/lib/stockImages';
 import { buildProductDescription, extractProductCustomization } from '@/lib/productCustomization';
-import { 
-  Store, Package, Settings, QrCode, Plus, Pencil, Trash2, 
+import { migrateEmbeddedCustomizations, isMigrationDone, markMigrationDone } from '@/lib/migrateCustomizations';
+import type { CustomizationGroup, CustomizationOption } from '@/lib/types';
+import {
+  DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent
+} from '@dnd-kit/core';
+import {
+  arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, useSortable
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import {
+  Store, Package, Settings, QrCode, Plus, Pencil, Trash2,
   Eye, Copy, Phone, Palette, Check, LogOut, Upload, Loader2,
   AlertCircle, ShieldAlert, ChevronRight, CheckCircle2, RefreshCw,
-  Image as ImageIcon, ArrowLeft, ArrowUp, ArrowDown, Sparkles
+  Image as ImageIcon, ArrowLeft, ArrowUp, ArrowDown, Sparkles,
+  GripVertical, CopyPlus, FolderInput, Layers
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -75,14 +85,156 @@ const compressImage = (file: File, maxWidth = 1600, quality = 0.8): Promise<File
   });
 };
 
+// ─── Componente SortableProduct ───────────────────────────────────────────────
+function SortableProduct({
+  product,
+  catProducts,
+  formatPrice,
+  onEdit,
+  onDelete,
+  onDuplicate,
+  onMoveCategory,
+  onMovePosition,
+  toggleAvailability,
+}: {
+  product: any;
+  catProducts: any[];
+  formatPrice: (p: number) => string;
+  onEdit: (p: any) => void;
+  onDelete: (id: string) => void;
+  onDuplicate: (p: any) => void;
+  onMoveCategory: (p: any) => void;
+  onMovePosition: (id: string, dir: 'up' | 'down') => void;
+  toggleAvailability: (id: string, cur: boolean) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: product.id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 50 : undefined,
+  };
+  const idx = catProducts.findIndex(p => p.id === product.id);
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="bg-slate-900/70 border border-slate-850 p-4 rounded-xl flex items-center justify-between gap-4"
+    >
+      {/* Drag handle */}
+      <button
+        {...listeners}
+        {...attributes}
+        className="text-slate-600 hover:text-slate-400 cursor-grab active:cursor-grabbing flex-shrink-0 p-1"
+        title="Arrastrar para reordenar"
+        type="button"
+      >
+        <GripVertical className="w-4 h-4" />
+      </button>
+
+      <div className="flex items-center gap-4 flex-1 truncate">
+        {product.image_url ? (
+          <img src={product.image_url} alt={product.name} className="w-14 h-14 rounded-lg object-cover flex-shrink-0" />
+        ) : (
+          <div className="w-14 h-14 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-center flex-shrink-0 text-slate-500 text-xs font-semibold">
+            Sin Foto
+          </div>
+        )}
+        <div className="truncate text-left">
+          <h5 className="font-bold text-sm text-white truncate">{product.name}</h5>
+          <p className="text-xs text-slate-400 truncate max-w-[200px]">
+            {extractProductCustomization(product.description).cleanDescription || product.description}
+          </p>
+          <span className="text-xs font-bold text-orange-400">{formatPrice(product.price)}</span>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        {/* Toggle disponibilidad */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] text-slate-500 hidden sm:block">{product.available ? 'Activo' : 'Pausado'}</span>
+          <Switch
+            checked={product.available}
+            onCheckedChange={() => toggleAvailability(product.id, product.available)}
+          />
+        </div>
+
+        {/* ↑↓ */}
+        <div className="flex flex-col gap-0.5">
+          <button
+            type="button"
+            onClick={() => onMovePosition(product.id, 'up')}
+            disabled={idx === 0}
+            className="p-1.5 rounded bg-slate-950 hover:bg-slate-850 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 cursor-pointer"
+            title="Subir"
+          >
+            <ArrowUp className="w-3 h-3" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onMovePosition(product.id, 'down')}
+            disabled={idx === catProducts.length - 1}
+            className="p-1.5 rounded bg-slate-950 hover:bg-slate-850 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 cursor-pointer"
+            title="Bajar"
+          >
+            <ArrowDown className="w-3 h-3" />
+          </button>
+        </div>
+
+        {/* Acciones */}
+        <div className="flex gap-1">
+          <button
+            onClick={() => onDuplicate(product)}
+            className="p-2 rounded-lg bg-slate-950 text-amber-400 hover:text-amber-300 hover:bg-slate-850 cursor-pointer"
+            title="Duplicar plato"
+            type="button"
+          >
+            <CopyPlus className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => onMoveCategory(product)}
+            className="p-2 rounded-lg bg-slate-950 text-sky-400 hover:text-sky-300 hover:bg-slate-850 cursor-pointer"
+            title="Mover a otra categoría"
+            type="button"
+          >
+            <FolderInput className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => onEdit(product)}
+            className="p-2 rounded-lg bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-850 cursor-pointer"
+            title="Editar"
+            type="button"
+          >
+            <Pencil className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => onDelete(product.id)}
+            className="p-2 rounded-lg bg-slate-950 text-red-400 hover:text-red-300 hover:bg-slate-850 cursor-pointer"
+            title="Eliminar"
+            type="button"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Dashboard principal ──────────────────────────────────────────────────────
 export default function Dashboard() {
   const router = useRouter();
   const supabase = createClient();
-  
+
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   const [products, setProducts] = useState<any[]>([]);
+
+  // Grupos globales de personalización
+  const [customizationGroups, setCustomizationGroups] = useState<CustomizationGroup[]>([]);
+  const [migrating, setMigrating] = useState(false);
 
   // Estados del Onboarding
   const [onboardingStep, setOnboardingStep] = useState(1);
@@ -90,58 +242,78 @@ export default function Dashboard() {
   const [slug, setSlug] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
   const [primaryColor, setPrimaryColor] = useState('#E53E3E');
-  const [logoFile, setLogoFile] = useState<File | null>(null); // Archivo de logo en Onboarding
+  const [logoFile, setLogoFile] = useState<File | null>(null);
   const [menuFiles, setMenuFiles] = useState<File[]>([]);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
-  
+
   // IA Loader
   const [isExtracting, setIsExtracting] = useState(false);
   const [iaProgress, setIaProgress] = useState('');
   const [parsedProducts, setParsedProducts] = useState<any[]>([]);
 
   // Estados del Dashboard
-  const [activeTab, setActiveTab] = useState<'overview' | 'products' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'products' | 'groups' | 'settings'>('overview');
   const [isAddingProduct, setIsAddingProduct] = useState(false);
   const [editingProduct, setEditingProduct] = useState<any | null>(null);
   const [copied, setCopied] = useState(false);
-  const [draggedProductId, setDraggedProductId] = useState<string | null>(null);
-  
+
   // Form de agregar/editar producto
   const [prodName, setProdName] = useState('');
   const [prodDesc, setProdDesc] = useState('');
-  const [prodCustomizationTitle, setProdCustomizationTitle] = useState('');
-  const [prodCustomizationDescription, setProdCustomizationDescription] = useState('');
-  const [prodCustomizationGroups, setProdCustomizationGroups] = useState<any[]>([]);
   const [prodPrice, setProdPrice] = useState(0);
   const [prodCategory, setProdCategory] = useState('');
   const [prodAvailable, setProdAvailable] = useState(true);
   const [prodError, setProdError] = useState<string | null>(null);
   const [prodLoading, setProdLoading] = useState(false);
+  // Grupos seleccionados para el producto en edición
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
 
-  // Funciones de Fotos y Carga en Producto
+  // Fotos
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [selectedStockUrl, setSelectedStockUrl] = useState<string>('');
   const [showStockGallery, setShowStockGallery] = useState(false);
 
-  // Asistente de Fotos ("Encuesta/Módulo")
+  // Asistente de Fotos
   const [isPhotoWizardOpen, setIsPhotoWizardOpen] = useState(false);
   const [currentWizardIndex, setCurrentWizardIndex] = useState(0);
   const [wizardImageFile, setWizardImageFile] = useState<File | null>(null);
   const [wizardSelectedStockUrl, setWizardSelectedStockUrl] = useState<string>('');
   const [wizardShowStockGallery, setWizardShowStockGallery] = useState(false);
   const [wizardLoading, setWizardLoading] = useState(false);
+  const [wizardSelectedCategory, setWizardSelectedCategory] = useState<string | null>(null);
+  const [wizardEditingProduct, setWizardEditingProduct] = useState<any | null>(null);
 
   // Ordenador de Categorías
   const [isOrderCategoriesOpen, setIsOrderCategoriesOpen] = useState(false);
   const [categoryOrderList, setCategoryOrderList] = useState<string[]>([]);
 
-  const [wizardSelectedCategory, setWizardSelectedCategory] = useState<string | null>(null);
-  const [wizardEditingProduct, setWizardEditingProduct] = useState<any | null>(null);
+  // Modal mover categoría
+  const [movingProduct, setMovingProduct] = useState<any | null>(null);
+  const [moveTargetCategory, setMoveTargetCategory] = useState('');
 
-  // Carga de logo en settings
+  // Logo en settings
   const [settingsLogoFile, setSettingsLogoFile] = useState<File | null>(null);
   const [settingsLogoUploading, setSettingsLogoUploading] = useState(false);
 
+  // ─── Editor de Grupos Globales ───────────────────────────────────────────
+  const [editingGroup, setEditingGroup] = useState<CustomizationGroup | null>(null);
+  const [isGroupEditorOpen, setIsGroupEditorOpen] = useState(false);
+  const [groupName, setGroupName] = useState('');
+  const [groupDescription, setGroupDescription] = useState('');
+  const [groupRequired, setGroupRequired] = useState(false);
+  const [groupMin, setGroupMin] = useState(0);
+  const [groupMax, setGroupMax] = useState(1);
+  const [groupOptions, setGroupOptions] = useState<{ id: string; label: string; price: number }[]>([]);
+  const [groupSaving, setGroupSaving] = useState(false);
+  const [groupError, setGroupError] = useState<string | null>(null);
+
+  // dnd-kit sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  // ─── Carga inicial ───────────────────────────────────────────────────────
   useEffect(() => {
     const checkAuth = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -150,7 +322,7 @@ export default function Dashboard() {
         return;
       }
       setUser(session.user);
-      
+
       const { data: prof } = await supabase
         .from('profiles')
         .select('*')
@@ -159,13 +331,43 @@ export default function Dashboard() {
 
       if (prof) {
         setProfile(prof);
-        const { data: prods } = await supabase
-          .from('products')
-          .select('*')
-          .eq('restaurant_id', session.user.id)
-          .order('category', { ascending: true });
-        
-        setProducts(prods || []);
+
+        const [{ data: prods }, { data: groups }] = await Promise.all([
+          supabase
+            .from('products')
+            .select('*')
+            .eq('restaurant_id', session.user.id)
+            .order('category', { ascending: true }),
+          supabase
+            .from('customization_groups')
+            .select('*, options:customization_options(*)')
+            .eq('restaurant_id', session.user.id)
+            .order('display_order', { ascending: true }),
+        ]);
+
+        const loadedProducts = prods || [];
+        setProducts(loadedProducts);
+        setCustomizationGroups(groups || []);
+
+        // Migración automática (una sola vez)
+        if (!isMigrationDone() && loadedProducts.some((p: any) => p.description?.includes('__MENU_CUSTOMIZATION__'))) {
+          setMigrating(true);
+          try {
+            await migrateEmbeddedCustomizations(supabase, session.user.id, loadedProducts);
+            // Recargar datos migrados
+            const [{ data: freshProds }, { data: freshGroups }] = await Promise.all([
+              supabase.from('products').select('*').eq('restaurant_id', session.user.id).order('category', { ascending: true }),
+              supabase.from('customization_groups').select('*, options:customization_options(*)').eq('restaurant_id', session.user.id).order('display_order', { ascending: true }),
+            ]);
+            setProducts(freshProds || []);
+            setCustomizationGroups(freshGroups || []);
+          } catch (e) {
+            console.error('Error en migración:', e);
+          } finally {
+            markMigrationDone();
+            setMigrating(false);
+          }
+        }
       }
       setLoading(false);
     };
@@ -173,147 +375,83 @@ export default function Dashboard() {
     checkAuth();
   }, [router, supabase]);
 
-  // Generar Slug automáticamente
-  const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setRestaurantName(val);
-    setSlug(
-      val
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "") 
-        .replace(/[^a-z0-9\s-]/g, "") 
-        .trim()
-        .replace(/\s+/g, "-") 
-    );
-  };
-
-  // Subir logotipo a Supabase Storage
+  // ─── Helpers de carga de archivos ────────────────────────────────────────
   const handleUploadLogo = async (file: File) => {
     const fileExt = file.name.split('.').pop();
     const fileName = `logo-${Date.now()}.${fileExt}`;
     const filePath = `logos/${user.id}/${fileName}`;
-    
-    const { error: uploadError } = await supabase.storage
-      .from('restaurant-assets')
-      .upload(filePath, file, { upsert: true });
-    
+    const { error: uploadError } = await supabase.storage.from('restaurant-assets').upload(filePath, file, { upsert: true });
     if (uploadError) throw uploadError;
-    
-    const { data: { publicUrl } } = supabase.storage
-      .from('restaurant-assets')
-      .getPublicUrl(filePath);
-    
+    const { data: { publicUrl } } = supabase.storage.from('restaurant-assets').getPublicUrl(filePath);
     return publicUrl;
   };
 
-  // Subir imagen de producto a Supabase Storage
   const handleUploadImage = async (file: File) => {
     const fileExt = file.name.split('.').pop();
     const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
     const filePath = `products/${user.id}/${fileName}`;
-    
-    const { error: uploadError } = await supabase.storage
-      .from('restaurant-assets')
-      .upload(filePath, file, { upsert: true });
-    
+    const { error: uploadError } = await supabase.storage.from('restaurant-assets').upload(filePath, file, { upsert: true });
     if (uploadError) throw uploadError;
-    
-    const { data: { publicUrl } } = supabase.storage
-      .from('restaurant-assets')
-      .getPublicUrl(filePath);
-    
+    const { data: { publicUrl } } = supabase.storage.from('restaurant-assets').getPublicUrl(filePath);
     return publicUrl;
   };
 
-  // Subir el menú temporal de Onboarding a Supabase Storage
   const handleUploadTempMenu = async (file: File | Blob, fallbackName?: string) => {
     const resolvedName = file instanceof File ? file.name : (fallbackName || 'menu-upload');
     const fileExt = resolvedName.split('.').pop() || 'jpg';
     const fileName = `temp-menu-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${fileExt}`;
     const filePath = `products/${user.id}/${fileName}`;
-    
-    const { error: uploadError } = await supabase.storage
-      .from('restaurant-assets')
-      .upload(filePath, file, { upsert: true });
-    
+    const { error: uploadError } = await supabase.storage.from('restaurant-assets').upload(filePath, file, { upsert: true });
     if (uploadError) throw uploadError;
-    
-    const { data: { publicUrl } } = supabase.storage
-      .from('restaurant-assets')
-      .getPublicUrl(filePath);
-    
+    const { data: { publicUrl } } = supabase.storage.from('restaurant-assets').getPublicUrl(filePath);
     return publicUrl;
   };
 
-  // Procesar UNA imagen/PDF con Gemini y devolver los productos extraídos
+  // ─── IA: Parse menu ──────────────────────────────────────────────────────
   const parseMenuFile = async (file: File) => {
     let fileToSend: File | Blob = file;
     if (file.type.startsWith('image/')) {
       setIaProgress('Optimizando imagen para la IA...');
-      try {
-        fileToSend = await compressImage(file);
-      } catch (e) {
-        console.error('Error al comprimir imagen:', e);
-      }
+      try { fileToSend = await compressImage(file); } catch (e) { console.error(e); }
     }
-
     setIaProgress('Subiendo archivo temporal a almacenamiento seguro...');
     const fileUrl = await handleUploadTempMenu(fileToSend, file.name);
-
     const res = await fetch('/api/parse-menu', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fileUrl, mimeType: file.type })
     });
-
     if (!res.ok) {
       let errMsg = 'No se pudo analizar el archivo';
       try {
         const errorData = await res.json();
         errMsg = errorData.error || errMsg;
-      } catch (e) {
-        if (res.status === 413) {
-          errMsg = 'El archivo es demasiado grande para ser procesado por el servidor. Intenta recortar o reducir el peso de la imagen.';
-        } else {
-          errMsg = `Error del servidor (${res.status}): No se pudo procesar la carta.`;
-        }
+      } catch {
+        if (res.status === 413) errMsg = 'El archivo es demasiado grande. Intenta reducir el peso de la imagen.';
+        else errMsg = `Error del servidor (${res.status}): No se pudo procesar la carta.`;
       }
       throw new Error(errMsg);
     }
-
     const data = await res.json();
-
     if (!data.products || !Array.isArray(data.products) || data.products.length === 0) {
-      throw new Error('La IA no pudo estructurar correctamente los platos del menú. Intenta con otra imagen o PDF más clara.');
+      throw new Error('La IA no pudo estructurar correctamente los platos. Intenta con otra imagen o PDF más clara.');
     }
-
     return data.products;
   };
 
-  // Onboarding: Ejecutar OCR / IA sobre varias imágenes o PDFs y combinarlos en un solo menú
   const handleAnalyzeMenu = async () => {
     if (!menuFiles.length) return;
     setIsExtracting(true);
     setOnboardingError(null);
-    setIaProgress('Conectando con la IA de Gemini para analizar varias fuentes...');
-
+    setIaProgress('Conectando con la IA de Gemini...');
     try {
       const extractedProducts: any[] = [];
-
       for (let index = 0; index < menuFiles.length; index += 1) {
-        const file = menuFiles[index];
         setIaProgress(`Analizando archivo ${index + 1} de ${menuFiles.length}...`);
-        const products = await parseMenuFile(file);
+        const products = await parseMenuFile(menuFiles[index]);
         extractedProducts.push(...products);
       }
-
-      if (extractedProducts.length === 0) {
-        throw new Error('No se encontró ningún plato válido en las imágenes o PDFs seleccionados.');
-      }
-
+      if (extractedProducts.length === 0) throw new Error('No se encontró ningún plato válido.');
       setParsedProducts(prev => [...prev, ...extractedProducts]);
       setOnboardingStep(3);
     } catch (err: any) {
@@ -324,89 +462,61 @@ export default function Dashboard() {
     }
   };
 
-  // Permitir agregar más platos usando imágenes/PDFs luego de la extracción inicial
   const handleAddProductsFromImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || []);
     if (!selectedFiles.length) return;
-
     setIsExtracting(true);
     setOnboardingError(null);
     setIaProgress('Agregando platos desde nuevas imágenes o PDFs...');
-
     try {
       const extraProducts: any[] = [];
       for (let index = 0; index < selectedFiles.length; index += 1) {
-        const file = selectedFiles[index];
         setIaProgress(`Procesando archivo adicional ${index + 1} de ${selectedFiles.length}...`);
-        const products = await parseMenuFile(file);
-        extraProducts.push(...products);
+        const prods = await parseMenuFile(selectedFiles[index]);
+        extraProducts.push(...prods);
       }
-
-      if (extraProducts.length === 0) {
-        throw new Error('No se detectaron platos válidos en los archivos adicionales.');
-      }
-
+      if (extraProducts.length === 0) throw new Error('No se detectaron platos válidos.');
       setParsedProducts(prev => [...prev, ...extraProducts]);
     } catch (err: any) {
-      setOnboardingError(err.message || 'Error al agregar platos desde imágenes');
+      setOnboardingError(err.message || 'Error al agregar platos');
     } finally {
       setIsExtracting(false);
       e.target.value = '';
     }
   };
 
-  // Onboarding: Guardar Restaurante y Productos parsed a Supabase
+  // ─── Onboarding: Publicar menú ───────────────────────────────────────────
+  const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setRestaurantName(val);
+    setSlug(val.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-'));
+  };
+
   const handlePublishMenu = async () => {
     setOnboardingError(null);
     setLoading(true);
-
     try {
-      // Subir el logo si el usuario seleccionó uno
       let uploadedLogoUrl = null;
-      if (logoFile) {
-        uploadedLogoUrl = await handleUploadLogo(logoFile);
-      }
-
+      if (logoFile) uploadedLogoUrl = await handleUploadLogo(logoFile);
       const uniqueCats = Array.from(new Set(parsedProducts.map(p => p.category || 'Varios')));
-      
       const { error: profError } = await supabase.from('profiles').insert({
-        id: user.id,
-        name: restaurantName,
-        slug,
-        logo_url: uploadedLogoUrl,
-        whatsapp,
-        primary_color: primaryColor,
-        is_open: true,
-        category_order: uniqueCats
+        id: user.id, name: restaurantName, slug, logo_url: uploadedLogoUrl,
+        whatsapp, primary_color: primaryColor, is_open: true, category_order: uniqueCats
       });
-
       if (profError) {
-        if (profError.code === '23505') {
-          throw new Error('Ya existe un restaurante registrado con esta URL (slug). Intenta cambiar el nombre o el slug en el Paso 1.');
-        }
+        if (profError.code === '23505') throw new Error('Ya existe un restaurante con esta URL. Cambia el nombre o el slug.');
         throw profError;
       }
-
       if (parsedProducts.length > 0) {
-        // NOTA: Por requerimiento, los platos no llevarán imagen por defecto ('') 
-        // a menos que el usuario les asigne una explícitamente más tarde.
         const prodsToInsert = parsedProducts.map(p => ({
-          restaurant_id: user.id,
-          name: p.name,
-          description: p.description || '',
-          price: Number(p.price) || 0,
-          category: p.category || 'Varios',
-          image_url: '', // Sin foto por defecto
-          available: true
+          restaurant_id: user.id, name: p.name, description: p.description || '',
+          price: Number(p.price) || 0, category: p.category || 'Varios', image_url: '', available: true
         }));
-
         const { error: prodsError } = await supabase.from('products').insert(prodsToInsert);
         if (prodsError) throw prodsError;
       }
-
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single();
       const { data: prods } = await supabase.from('products').select('*').eq('restaurant_id', user.id);
-      
       setProfile(prof);
       setProducts(prods || []);
     } catch (err: any) {
@@ -417,23 +527,15 @@ export default function Dashboard() {
     }
   };
 
-  // Settings: Subir y cambiar logo del restaurante
+  // ─── Settings ────────────────────────────────────────────────────────────
   const handleSettingsLogoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    
     setSettingsLogoUploading(true);
     try {
       const publicUrl = await handleUploadLogo(file);
-      
-      // Actualizar en base de datos
-      const { error } = await supabase
-        .from('profiles')
-        .update({ logo_url: publicUrl })
-        .eq('id', user.id);
-
+      const { error } = await supabase.from('profiles').update({ logo_url: publicUrl }).eq('id', user.id);
       if (error) throw error;
-      
       setProfile({ ...profile, logo_url: publicUrl });
       alert('Logo actualizado correctamente.');
     } catch (err: any) {
@@ -443,43 +545,16 @@ export default function Dashboard() {
     }
   };
 
-  // Dashboard: Guardar Ajustes del restaurante
   const handleSaveSettings = async () => {
     try {
       const payload = {
-        name: profile.name,
-        whatsapp: profile.whatsapp,
-        primary_color: profile.primary_color,
-        is_open: profile.is_open,
-        menu_cover_image_url: profile.menu_cover_image_url || '',
-        menu_cover_title: profile.menu_cover_title || '',
-        menu_cover_description: profile.menu_cover_description || '',
+        name: profile.name, whatsapp: profile.whatsapp, primary_color: profile.primary_color,
+        is_open: profile.is_open, menu_cover_image_url: profile.menu_cover_image_url || '',
+        menu_cover_title: profile.menu_cover_title || '', menu_cover_description: profile.menu_cover_description || '',
       };
-
-      const { error } = await supabase
-        .from('profiles')
-        .update(payload)
-        .eq('id', user.id);
-
-      if (error) {
-        if (error.code === '42703' || error.message?.includes('column')) {
-          alert('No se pudo guardar la portada en la base de datos. Asegúrate de que la tabla profiles tenga las columnas menu_cover_image_url, menu_cover_title y menu_cover_description.');
-          return;
-        }
-        throw error;
-      }
-
-      const { data: updatedProfile, error: fetchError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-
-      if (fetchError) {
-        alert('Configuración guardada, pero no se pudo recargar el perfil automático. Refresca la página para ver los cambios.');
-        return;
-      }
-
+      const { error } = await supabase.from('profiles').update(payload).eq('id', user.id);
+      if (error) throw error;
+      const { data: updatedProfile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
       setProfile(updatedProfile);
       alert('Configuración guardada correctamente.');
     } catch (err: any) {
@@ -487,155 +562,139 @@ export default function Dashboard() {
     }
   };
 
-  const createCustomizationGroup = () => ({
-    id: `group-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    label: '',
-    description: '',
-    required: true,
-    minSelections: 1,
-    maxSelections: 1,
-    options: [{
-      id: `option-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      label: '',
-    }],
-  });
+  // ─── Productos ───────────────────────────────────────────────────────────
+  const getProductsForCategory = useCallback((category: string) => {
+    return [...products.filter(p => p.category === category)].sort((a, b) => {
+      const aO = Number(a.display_order ?? 0);
+      const bO = Number(b.display_order ?? 0);
+      return aO - bO;
+    });
+  }, [products]);
 
-  const addCustomizationGroup = () => {
-    setProdCustomizationGroups(prev => [...prev, createCustomizationGroup()]);
-  };
-
-  const removeCustomizationGroup = (groupId: string) => {
-    setProdCustomizationGroups(prev => prev.filter(group => group.id !== groupId));
-  };
-
-  const addCustomizationOption = (groupId: string) => {
-    setProdCustomizationGroups(prev => prev.map(group => {
-      if (group.id !== groupId) return group;
-      return {
-        ...group,
-        options: [...group.options, {
-          id: `option-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          label: '',
-        }],
-      };
-    }));
-  };
-
-  const removeCustomizationOption = (groupId: string, optionId: string) => {
-    setProdCustomizationGroups(prev => prev.map((group: any) => {
-      if (group.id !== groupId) return group;
-      const nextOptions = (group.options || []).filter((option: any) => option.id !== optionId);
-      return { ...group, options: nextOptions.length > 0 ? nextOptions : [{ id: `option-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, label: '' }] };
-    }));
-  };
-
-  const buildCustomizationConfigFromState = () => {
-    const groups = prodCustomizationGroups
-      .map(group => ({
-        id: group.id,
-        label: group.label.trim(),
-        description: group.description.trim(),
-        required: group.required,
-        minSelections: Number(group.minSelections) || 1,
-        maxSelections: Number(group.maxSelections) || 1,
-        options: group.options
-          .map((option: any) => ({
-            id: option.id,
-            label: String(option.label || '').trim(),
-          }))
-          .filter((option: any) => option.label),
-      }))
-      .filter(group => group.label || group.options.length > 0);
-
-    if (groups.length === 0) {
-      return null;
+  const reorderProductsInCategory = async (category: string, orderedIds: string[]) => {
+    const updatedProducts = products.map(product => {
+      if (product.category !== category) return product;
+      const newIndex = orderedIds.indexOf(product.id);
+      return { ...product, display_order: newIndex >= 0 ? newIndex + 1 : product.display_order };
+    });
+    setProducts(updatedProducts);
+    try {
+      await Promise.all(
+        orderedIds.map((id, index) =>
+          supabase.from('products').update({ display_order: index + 1 }).eq('id', id)
+        )
+      );
+    } catch {
+      alert('No se pudo guardar el nuevo orden. Asegúrate de que la columna display_order exista en la tabla products.');
     }
-
-    return {
-      title: prodCustomizationTitle.trim(),
-      description: prodCustomizationDescription.trim(),
-      groups,
-    };
   };
 
-  const hydrateCustomizationState = (config: any) => {
-    if (!config || !Array.isArray(config.groups) || config.groups.length === 0) {
-      setProdCustomizationTitle('');
-      setProdCustomizationDescription('');
-      setProdCustomizationGroups([]);
-      return;
+  const moveProductPosition = async (productId: string, direction: 'up' | 'down') => {
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
+    const catProds = getProductsForCategory(product.category);
+    const currentIndex = catProds.findIndex(p => p.id === productId);
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (currentIndex === -1 || targetIndex < 0 || targetIndex >= catProds.length) return;
+    const newOrder = [...catProds];
+    const [moved] = newOrder.splice(currentIndex, 1);
+    newOrder.splice(targetIndex, 0, moved);
+    await reorderProductsInCategory(product.category, newOrder.map(p => p.id));
+  };
+
+  const handleDragEnd = async (event: DragEndEvent, category: string) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const catProds = getProductsForCategory(category);
+    const oldIndex = catProds.findIndex(p => p.id === active.id);
+    const newIndex = catProds.findIndex(p => p.id === over.id);
+    const newOrder = arrayMove(catProds, oldIndex, newIndex).map(p => p.id);
+    await reorderProductsInCategory(category, newOrder);
+  };
+
+  const openProductForm = (product: any | null) => {
+    setEditingProduct(product);
+    if (product) {
+      const { cleanDescription } = extractProductCustomization(product.description);
+      setProdName(product.name);
+      setProdDesc(cleanDescription || '');
+      setProdPrice(product.price);
+      setProdCategory(product.category);
+      setProdAvailable(product.available);
+      setSelectedStockUrl(product.image_url || '');
+    } else {
+      setProdName('');
+      setProdDesc('');
+      setProdPrice(0);
+      setProdCategory(orderedCategories[0] || 'Platos');
+      setProdAvailable(true);
+      setSelectedStockUrl('');
     }
-
-    setProdCustomizationTitle(config.title || '');
-    setProdCustomizationDescription(config.description || '');
-    setProdCustomizationGroups(config.groups.map((group: any) => ({
-      id: group.id || `group-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      label: group.label || '',
-      description: group.description || '',
-      required: Boolean(group.required),
-      minSelections: Number(group.minSelections) || (group.required ? 1 : 0),
-      maxSelections: Number(group.maxSelections) || Math.max(1, (group.options || []).length || 1),
-      options: (group.options || []).map((option: any) => ({
-        id: option.id || `option-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        label: option.label || '',
-      })),
-    })));
+    setImageFile(null);
+    setProdError(null);
+    // Cargar grupos vinculados al producto
+    if (product) {
+      loadProductGroupLinks(product.id);
+    } else {
+      setSelectedGroupIds([]);
+    }
+    setIsAddingProduct(true);
   };
 
-  // Dashboard: Agregar/Editar Producto
+  const loadProductGroupLinks = async (productId: string) => {
+    const { data } = await supabase
+      .from('product_customization_groups')
+      .select('group_id')
+      .eq('product_id', productId);
+    setSelectedGroupIds((data || []).map((r: any) => r.group_id));
+  };
+
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     setProdError(null);
     setProdLoading(true);
-
     try {
       let final_image_url = editingProduct?.image_url || '';
-      
       if (imageFile) {
         final_image_url = await handleUploadImage(imageFile);
       } else if (selectedStockUrl) {
         final_image_url = selectedStockUrl;
       }
 
-      const customizationConfig = buildCustomizationConfigFromState();
-      const finalDescription = buildProductDescription(prodDesc, customizationConfig);
+      let productId = editingProduct?.id;
 
       if (editingProduct) {
-        const { error } = await supabase
-          .from('products')
-          .update({
-            name: prodName,
-            description: finalDescription,
-            price: prodPrice,
-            category: prodCategory,
-            available: prodAvailable,
-            image_url: final_image_url
-          })
-          .eq('id', editingProduct.id);
-
+        const { error } = await supabase.from('products').update({
+          name: prodName, description: prodDesc, price: prodPrice,
+          category: prodCategory, available: prodAvailable, image_url: final_image_url
+        }).eq('id', editingProduct.id);
         if (error) throw error;
       } else {
-        const { error } = await supabase
-          .from('products')
-          .insert({
-            restaurant_id: user.id,
-            name: prodName,
-            description: finalDescription,
-            price: prodPrice,
-            category: prodCategory,
-            available: prodAvailable,
-            image_url: final_image_url
-          });
-
+        const { data: newProd, error } = await supabase.from('products').insert({
+          restaurant_id: user.id, name: prodName, description: prodDesc, price: prodPrice,
+          category: prodCategory, available: prodAvailable, image_url: final_image_url
+        }).select('id').single();
         if (error) throw error;
+        productId = newProd.id;
+      }
+
+      // Sincronizar grupos seleccionados
+      if (productId) {
+        await supabase.from('product_customization_groups').delete().eq('product_id', productId);
+        if (selectedGroupIds.length > 0) {
+          await supabase.from('product_customization_groups').insert(
+            selectedGroupIds.map((gid, idx) => ({
+              product_id: productId,
+              group_id: gid,
+              is_copy: false,
+              display_order: idx,
+            }))
+          );
+        }
       }
 
       const { data: prods } = await supabase
-        .from('products')
-        .select('*')
-        .eq('restaurant_id', user.id)
-        .order('category', { ascending: true });
-      
+        .from('products').select('*').eq('restaurant_id', user.id).order('category', { ascending: true });
       setProducts(prods || []);
       setIsAddingProduct(false);
       setEditingProduct(null);
@@ -648,7 +707,6 @@ export default function Dashboard() {
     }
   };
 
-  // Dashboard: Eliminar Producto
   const handleDeleteProduct = async (id: string) => {
     if (!confirm('¿Estás seguro de eliminar este producto de tu menú?')) return;
     try {
@@ -660,14 +718,64 @@ export default function Dashboard() {
     }
   };
 
-  // Dashboard: Cambiar disponibilidad
-  const toggleAvailability = async (id: string, currentStatus: boolean) => {
+  const handleDuplicateProduct = async (product: any) => {
+    try {
+      const { cleanDescription } = extractProductCustomization(product.description);
+      const { data: newProd, error } = await supabase.from('products').insert({
+        restaurant_id: user.id,
+        name: `Copia de ${product.name}`,
+        description: cleanDescription || product.description || '',
+        price: product.price,
+        category: product.category,
+        image_url: product.image_url || '',
+        available: false, // pausado por defecto para que el admin lo revise
+        display_order: (product.display_order || 0) + 1,
+      }).select('id').single();
+      if (error) throw error;
+
+      // Copiar vínculos de grupos
+      const { data: links } = await supabase
+        .from('product_customization_groups')
+        .select('group_id, display_order')
+        .eq('product_id', product.id);
+      if (links && links.length > 0) {
+        await supabase.from('product_customization_groups').insert(
+          links.map((l: any) => ({
+            product_id: newProd.id,
+            group_id: l.group_id,
+            is_copy: false,
+            display_order: l.display_order,
+          }))
+        );
+      }
+
+      const { data: prods } = await supabase
+        .from('products').select('*').eq('restaurant_id', user.id).order('category', { ascending: true });
+      setProducts(prods || []);
+    } catch (err: any) {
+      alert('Error al duplicar: ' + err.message);
+    }
+  };
+
+  const handleMoveProductToCategory = async () => {
+    if (!movingProduct || !moveTargetCategory.trim()) return;
     try {
       const { error } = await supabase
         .from('products')
-        .update({ available: !currentStatus })
-        .eq('id', id);
+        .update({ category: moveTargetCategory.trim() })
+        .eq('id', movingProduct.id);
+      if (error) throw error;
+      setProducts(products.map(p => p.id === movingProduct.id ? { ...p, category: moveTargetCategory.trim() } : p));
+      setMovingProduct(null);
+      setMoveTargetCategory('');
+    } catch (err: any) {
+      alert('Error al mover el plato: ' + err.message);
+    }
+  };
 
+  const toggleAvailability = async (id: string, currentStatus: boolean) => {
+    try {
+      const { error } = await supabase.from('products').update({ available: !currentStatus }).eq('id', id);
       if (error) throw error;
       setProducts(products.map(p => p.id === id ? { ...p, available: !currentStatus } : p));
     } catch (err: any) {
@@ -675,17 +783,104 @@ export default function Dashboard() {
     }
   };
 
-  // Dashboard: Cerrar Sesión
+  // ─── Grupos globales ─────────────────────────────────────────────────────
+  const openGroupEditor = (group: CustomizationGroup | null) => {
+    setEditingGroup(group);
+    if (group) {
+      setGroupName(group.name);
+      setGroupDescription(group.description);
+      setGroupRequired(group.required);
+      setGroupMin(group.min_selections);
+      setGroupMax(group.max_selections);
+      setGroupOptions((group.options || []).map(o => ({ id: o.id, label: o.label, price: o.price })));
+    } else {
+      setGroupName('');
+      setGroupDescription('');
+      setGroupRequired(false);
+      setGroupMin(0);
+      setGroupMax(1);
+      setGroupOptions([{ id: `new-${Date.now()}`, label: '', price: 0 }]);
+    }
+    setGroupError(null);
+    setIsGroupEditorOpen(true);
+  };
+
+  const handleSaveGroup = async () => {
+    if (!groupName.trim()) { setGroupError('El nombre del grupo es obligatorio.'); return; }
+    setGroupSaving(true);
+    setGroupError(null);
+    try {
+      const validOptions = groupOptions.filter(o => o.label.trim());
+      let savedGroupId = editingGroup?.id;
+
+      if (editingGroup) {
+        const { error } = await supabase.from('customization_groups').update({
+          name: groupName.trim(), description: groupDescription.trim(),
+          required: groupRequired, min_selections: groupMin, max_selections: groupMax,
+        }).eq('id', editingGroup.id);
+        if (error) throw error;
+        // Eliminar opciones viejas y re-insertar
+        await supabase.from('customization_options').delete().eq('group_id', editingGroup.id);
+      } else {
+        const { data: newGroup, error } = await supabase.from('customization_groups').insert({
+          restaurant_id: user.id, name: groupName.trim(), description: groupDescription.trim(),
+          required: groupRequired, min_selections: groupMin, max_selections: groupMax, display_order: customizationGroups.length,
+        }).select('id').single();
+        if (error) throw error;
+        savedGroupId = newGroup.id;
+      }
+
+      if (savedGroupId && validOptions.length > 0) {
+        await supabase.from('customization_options').insert(
+          validOptions.map((o, idx) => ({
+            group_id: savedGroupId, label: o.label.trim(), price: Number(o.price) || 0, display_order: idx
+          }))
+        );
+      }
+
+      // Recargar grupos
+      const { data: freshGroups } = await supabase
+        .from('customization_groups')
+        .select('*, options:customization_options(*)')
+        .eq('restaurant_id', user.id)
+        .order('display_order', { ascending: true });
+      setCustomizationGroups(freshGroups || []);
+      setIsGroupEditorOpen(false);
+    } catch (err: any) {
+      setGroupError(err.message || 'Error al guardar el grupo');
+    } finally {
+      setGroupSaving(false);
+    }
+  };
+
+  const handleDeleteGroup = async (groupId: string) => {
+    const usedIn = await supabase
+      .from('product_customization_groups')
+      .select('product_id')
+      .eq('group_id', groupId);
+    const count = usedIn.data?.length || 0;
+    const msg = count > 0
+      ? `Este grupo está usado en ${count} plato(s). Al eliminarlo, se desvinculará de todos ellos. ¿Continuar?`
+      : '¿Estás seguro de eliminar este grupo?';
+    if (!confirm(msg)) return;
+    try {
+      const { error } = await supabase.from('customization_groups').delete().eq('id', groupId);
+      if (error) throw error;
+      setCustomizationGroups(customizationGroups.filter(g => g.id !== groupId));
+    } catch (err: any) {
+      alert('Error al eliminar: ' + err.message);
+    }
+  };
+
+  // ─── Misc ────────────────────────────────────────────────────────────────
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push('/');
   };
 
-  // Asistente de Fotos: Obtener imágenes de stock recomendadas
   const getRecommendedImages = (prodName: string, category: string) => {
     const nameLower = prodName.toLowerCase();
     const catLower = category.toLowerCase();
-    
     const scored = STOCK_IMAGES.map(img => {
       let score = 0;
       const keywords = [img.id, img.name, ...img.category.split(' ')];
@@ -696,39 +891,25 @@ export default function Dashboard() {
       });
       return { img, score };
     });
-
-    const sorted = scored.sort((a, b) => b.score - a.score);
-    return sorted.slice(0, 4).map(item => item.img);
+    return scored.sort((a, b) => b.score - a.score).slice(0, 4).map(item => item.img);
   };
 
-  // Guardar foto para el producto seleccionado en el wizard
   const handleWizardSave = async () => {
     if (!wizardEditingProduct) return;
-    
     setWizardLoading(true);
     try {
       let final_image_url = wizardEditingProduct.image_url || '';
-
-      if (wizardImageFile) {
-        final_image_url = await handleUploadImage(wizardImageFile);
-      } else if (wizardSelectedStockUrl) {
-        final_image_url = wizardSelectedStockUrl;
-      } else {
+      if (wizardImageFile) final_image_url = await handleUploadImage(wizardImageFile);
+      else if (wizardSelectedStockUrl) final_image_url = wizardSelectedStockUrl;
+      else {
         setWizardEditingProduct(null);
         setWizardImageFile(null);
         setWizardSelectedStockUrl('');
         return;
       }
-
-      const { error } = await supabase
-        .from('products')
-        .update({ image_url: final_image_url })
-        .eq('id', wizardEditingProduct.id);
-
+      const { error } = await supabase.from('products').update({ image_url: final_image_url }).eq('id', wizardEditingProduct.id);
       if (error) throw error;
-
       setProducts(products.map(p => p.id === wizardEditingProduct.id ? { ...p, image_url: final_image_url } : p));
-      
       setWizardEditingProduct(null);
       setWizardImageFile(null);
       setWizardSelectedStockUrl('');
@@ -740,19 +921,12 @@ export default function Dashboard() {
     }
   };
 
-  // Quitar foto de un producto en el listado del wizard
   const handleWizardRemovePhoto = async (product: any) => {
-    if (!confirm(`¿Estás seguro de quitar la foto de "${product.name}"? El plato se mostrará solo con texto.`)) return;
-    
+    if (!confirm(`¿Estás seguro de quitar la foto de "${product.name}"?`)) return;
     setWizardLoading(true);
     try {
-      const { error } = await supabase
-        .from('products')
-        .update({ image_url: '' })
-        .eq('id', product.id);
-
+      const { error } = await supabase.from('products').update({ image_url: '' }).eq('id', product.id);
       if (error) throw error;
-
       setProducts(products.map(p => p.id === product.id ? { ...p, image_url: '' } : p));
     } catch (err: any) {
       alert('Error al quitar foto: ' + err.message);
@@ -761,46 +935,33 @@ export default function Dashboard() {
     }
   };
 
-  // Limpiar todas las fotos del menú de una vez
   const handleClearAllPhotos = async () => {
-    if (!confirm('⚠️ ¿Estás seguro de que deseas eliminar las fotos de TODOS los productos del menú? Los platos aparecerán únicamente con su nombre, precio y descripción.')) return;
-    
+    if (!confirm('⚠️ ¿Estás seguro de que deseas eliminar las fotos de TODOS los productos?')) return;
     setLoading(true);
     try {
-      const { error } = await supabase
-        .from('products')
-        .update({ image_url: '' })
-        .eq('restaurant_id', user.id);
-
+      const { error } = await supabase.from('products').update({ image_url: '' }).eq('restaurant_id', user.id);
       if (error) throw error;
-
       setProducts(products.map(p => ({ ...p, image_url: '' })));
-      alert('Se han eliminado todas las fotos de los productos de tu menú.');
+      alert('Se han eliminado todas las fotos.');
     } catch (err: any) {
-      alert('Error al limpiar las fotos: ' + err.message);
+      alert('Error: ' + err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // Ordenador de Categorías: Abrir
   const handleOpenOrderCategories = () => {
     const uniqueCats = Array.from(new Set(products.map(p => p.category)));
     const savedOrder = profile.category_order || [];
-    
     const filteredSaved = savedOrder.filter((c: string) => uniqueCats.includes(c));
     const remaining = uniqueCats.filter((c: string) => !filteredSaved.includes(c));
-    
-    const finalOrder = [...filteredSaved, ...remaining];
-    setCategoryOrderList(finalOrder);
+    setCategoryOrderList([...filteredSaved, ...remaining]);
     setIsOrderCategoriesOpen(true);
   };
 
-  // Ordenador de Categorías: Mover
   const handleMoveCategory = (index: number, direction: 'up' | 'down') => {
     const newOrder = [...categoryOrderList];
     const target = direction === 'up' ? index - 1 : index + 1;
-    
     if (target >= 0 && target < newOrder.length) {
       const temp = newOrder[index];
       newOrder[index] = newOrder[target];
@@ -809,16 +970,10 @@ export default function Dashboard() {
     }
   };
 
-  // Ordenador de Categorías: Guardar
   const handleSaveCategoryOrder = async () => {
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({ category_order: categoryOrderList })
-        .eq('id', user.id);
-
+      const { error } = await supabase.from('profiles').update({ category_order: categoryOrderList }).eq('id', user.id);
       if (error) throw error;
-
       setProfile({ ...profile, category_order: categoryOrderList });
       setIsOrderCategoriesOpen(false);
       alert('El orden de las categorías se guardó correctamente.');
@@ -827,72 +982,7 @@ export default function Dashboard() {
     }
   };
 
-  const getProductsForCategory = (category: string) => {
-    return [...products.filter(p => p.category === category)].sort((a, b) => {
-      const aOrder = Number(a.display_order ?? 0);
-      const bOrder = Number(b.display_order ?? 0);
-
-      if (aOrder > 0 || bOrder > 0) {
-        if (aOrder === bOrder) return 0;
-        return aOrder - bOrder;
-      }
-
-      return 0;
-    });
-  };
-
-  const reorderProductsInCategory = async (category: string, draggedId: string, targetId: string) => {
-    if (!draggedId || !targetId || draggedId === targetId) return;
-
-    const categoryProducts = getProductsForCategory(category);
-    const fromIndex = categoryProducts.findIndex(p => p.id === draggedId);
-    const toIndex = categoryProducts.findIndex(p => p.id === targetId);
-
-    if (fromIndex === -1 || toIndex === -1) return;
-
-    const reordered = [...categoryProducts];
-    const [moved] = reordered.splice(fromIndex, 1);
-    reordered.splice(toIndex, 0, moved);
-
-    const updatedProducts = products.map((product) => {
-      if (product.category !== category) return product;
-      const newIndex = reordered.findIndex(item => item.id === product.id);
-      return { ...product, display_order: newIndex >= 0 ? newIndex + 1 : Number(product.display_order ?? 0) };
-    });
-
-    setProducts(updatedProducts);
-
-    try {
-      await Promise.all(
-        reordered.map((product, index) =>
-          supabase
-            .from('products')
-            .update({ display_order: index + 1 })
-            .eq('id', product.id)
-        )
-      );
-    } catch (error: any) {
-      alert('No se pudo guardar el nuevo orden de los platos. Asegúrate de que la columna display_order exista en la tabla products.');
-    }
-  };
-
-  const moveProductPosition = async (productId: string, direction: 'up' | 'down') => {
-    const product = products.find(p => p.id === productId);
-    if (!product) return;
-
-    const categoryProducts = getProductsForCategory(product.category);
-    const currentIndex = categoryProducts.findIndex(p => p.id === productId);
-    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-
-    if (currentIndex === -1 || targetIndex < 0 || targetIndex >= categoryProducts.length) {
-      return;
-    }
-
-    await reorderProductsInCategory(product.category, productId, categoryProducts[targetIndex].id);
-  };
-
-  // URL del menú digital público
-  const publicUrl = profile ? `${window.location.origin}/menu/${profile.slug}` : '';
+  const publicUrl = profile ? `${typeof window !== 'undefined' ? window.location.origin : ''}/menu/${profile.slug}` : '';
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(publicUrl);
@@ -908,11 +998,9 @@ export default function Dashboard() {
     link.click();
   };
 
-  const formatPrice = (price: number) => {
-    return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(price);
-  };
+  const formatPrice = (price: number) =>
+    new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(price);
 
-  // Agrupar categorías según el orden
   const uniqueCats = Array.from(new Set(products.map(p => p.category)));
   const savedOrder = profile?.category_order || [];
   const orderedCategories = [
@@ -920,6 +1008,7 @@ export default function Dashboard() {
     ...uniqueCats.filter((c: string) => !savedOrder.includes(c))
   ];
 
+  // ─── Loading ─────────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white">
@@ -929,7 +1018,20 @@ export default function Dashboard() {
     );
   }
 
-  // ================= ONBOARDING WIZARD =================
+  // ─── Migración en curso ──────────────────────────────────────────────────
+  if (migrating) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white gap-4">
+        <Loader2 className="w-10 h-10 text-orange-500 animate-spin" />
+        <p className="text-white font-bold">Actualizando tu menú...</p>
+        <p className="text-slate-400 text-sm text-center max-w-xs">
+          Estamos migrando tus grupos de personalización al nuevo sistema. Solo ocurre una vez.
+        </p>
+      </div>
+    );
+  }
+
+  // ─── ONBOARDING ──────────────────────────────────────────────────────────
   if (!profile) {
     return (
       <div className="min-h-screen bg-slate-950 text-white font-sans flex flex-col justify-between">
@@ -946,18 +1048,17 @@ export default function Dashboard() {
           <div className="max-w-2xl mx-auto w-full">
             <div className="flex justify-between items-center mb-8 relative">
               <div className="absolute left-0 right-0 h-1 bg-slate-800 top-1/2 -translate-y-1/2 z-0" />
-              <div 
+              <div
                 className="absolute left-0 h-1 bg-gradient-to-r from-red-500 to-orange-500 top-1/2 -translate-y-1/2 z-0 transition-all duration-300"
                 style={{ width: `${((onboardingStep - 1) / 2) * 100}%` }}
               />
               {[1, 2, 3].map(step => (
-                <div 
+                <div
                   key={step}
-                  className={`w-10 h-10 rounded-full flex items-center justify-center font-bold z-10 border transition-all ${
-                    onboardingStep >= step 
-                      ? 'bg-orange-500 border-orange-500 text-white shadow-lg shadow-orange-500/25' 
-                      : 'bg-slate-900 border-slate-880 text-slate-500'
-                  }`}
+                  className={`w-10 h-10 rounded-full flex items-center justify-center font-bold z-10 border transition-all ${onboardingStep >= step
+                    ? 'bg-orange-500 border-orange-500 text-white shadow-lg shadow-orange-500/25'
+                    : 'bg-slate-900 border-slate-800 text-slate-500'
+                    }`}
                 >
                   {step}
                 </div>
@@ -977,41 +1078,22 @@ export default function Dashboard() {
                   <h2 className="text-2xl font-bold">Paso 1: Registra tu Restaurante</h2>
                   <p className="text-slate-400 mt-1">Completa los datos iniciales y sube tu logo.</p>
                 </div>
-
                 <div className="space-y-4">
-                  {/* CARGA DE LOGOTIPO EN ONBOARDING */}
                   <div className="flex flex-col items-center space-y-3 p-4 bg-slate-950 border border-slate-850 rounded-2xl">
                     {logoFile ? (
-                      <img 
-                        src={URL.createObjectURL(logoFile)} 
-                        alt="Vista previa logo" 
-                        className="w-20 h-20 rounded-full object-cover border-2 border-orange-500 shadow-md"
-                      />
+                      <img src={URL.createObjectURL(logoFile)} alt="Vista previa logo" className="w-20 h-20 rounded-full object-cover border-2 border-orange-500 shadow-md" />
                     ) : (
                       <div className="w-20 h-20 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500">
                         <Store className="w-8 h-8" />
                       </div>
                     )}
                     <div className="flex flex-col items-center gap-1.5 w-full">
-                      <Button 
-                        type="button" 
-                        variant="outline" 
-                        className="border-slate-850 text-xs text-slate-300 relative group cursor-pointer w-full"
-                      >
+                      <Button type="button" variant="outline" className="border-slate-850 text-xs text-slate-300 relative group cursor-pointer w-full">
                         <Upload className="w-4 h-4 mr-1 text-orange-500" /> {logoFile ? 'Cambiar Logo' : 'Subir Logo'}
-                        <input 
-                          type="file" 
-                          accept="image/*"
-                          onChange={(e) => setLogoFile(e.target.files?.[0] || null)}
-                          className="absolute inset-0 opacity-0 cursor-pointer"
-                        />
+                        <input type="file" accept="image/*" onChange={(e) => setLogoFile(e.target.files?.[0] || null)} className="absolute inset-0 opacity-0 cursor-pointer" />
                       </Button>
                       {logoFile && (
-                        <button 
-                          type="button"
-                          onClick={() => setLogoFile(null)}
-                          className="text-[10px] text-red-450 hover:text-red-400 font-bold transition-colors cursor-pointer mt-1"
-                        >
+                        <button type="button" onClick={() => setLogoFile(null)} className="text-[10px] text-red-400 hover:text-red-300 font-bold transition-colors cursor-pointer mt-1">
                           Quitar Logo
                         </button>
                       )}
@@ -1020,50 +1102,28 @@ export default function Dashboard() {
 
                   <div>
                     <label className="text-xs font-semibold text-slate-300 block mb-2">Nombre del Restaurante *</label>
-                    <Input 
-                      value={restaurantName}
-                      onChange={handleNameChange}
-                      placeholder="Ej: El Mariachi Picante"
-                      className="bg-slate-950 border-slate-850 text-white"
-                    />
+                    <Input value={restaurantName} onChange={handleNameChange} placeholder="Ej: El Mariachi Picante" className="bg-slate-950 border-slate-850 text-white" />
                   </div>
 
                   <div>
                     <label className="text-xs font-semibold text-slate-300 block mb-2">URL de tu Menú (Slug)</label>
                     <div className="flex items-center gap-1 bg-slate-950 border border-slate-850 rounded-xl px-4 py-2.5">
                       <span className="text-slate-500 text-sm">menusinteligentes.com/menu/</span>
-                      <input 
-                        value={slug}
-                        onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/\s+/g, '-'))}
-                        className="bg-transparent border-none outline-none text-white text-sm flex-1 font-semibold"
-                      />
+                      <input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/\s+/g, '-'))} className="bg-transparent border-none outline-none text-white text-sm flex-1 font-semibold" />
                     </div>
                   </div>
 
                   <div>
                     <label className="text-xs font-semibold text-slate-300 block mb-2">Número de WhatsApp para Pedidos *</label>
-                    <Input 
-                      value={whatsapp}
-                      onChange={(e) => setWhatsapp(e.target.value)}
-                      placeholder="Ej: +573132382592"
-                      className="bg-slate-950 border-slate-850 text-white"
-                    />
+                    <Input value={whatsapp} onChange={(e) => setWhatsapp(e.target.value)} placeholder="Ej: +573132382592" className="bg-slate-950 border-slate-850 text-white" />
                   </div>
 
                   <div>
                     <label className="text-xs font-semibold text-slate-300 block mb-2">Tema de color principal</label>
                     <div className="grid grid-cols-3 gap-2">
                       {THEMES.map(t => (
-                        <button
-                          key={t.color}
-                          type="button"
-                          onClick={() => setPrimaryColor(t.color)}
-                          className={`p-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all text-xs text-center cursor-pointer ${
-                            primaryColor === t.color 
-                              ? 'border-white bg-white/10' 
-                              : 'border-slate-850 hover:border-slate-700 bg-slate-950'
-                          }`}
-                        >
+                        <button key={t.color} type="button" onClick={() => setPrimaryColor(t.color)}
+                          className={`p-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all text-xs text-center cursor-pointer ${primaryColor === t.color ? 'border-white bg-white/10' : 'border-slate-850 hover:border-slate-700 bg-slate-950'}`}>
                           <span className="w-5 h-5 rounded-full" style={{ backgroundColor: t.color }} />
                           <span className="font-semibold">{t.name}</span>
                         </button>
@@ -1072,11 +1132,8 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                <Button 
-                  onClick={() => setOnboardingStep(2)} 
-                  disabled={!restaurantName.trim() || !whatsapp.trim()}
-                  className="w-full bg-gradient-to-r from-red-600 to-orange-500 font-bold py-6 text-white cursor-pointer"
-                >
+                <Button onClick={() => setOnboardingStep(2)} disabled={!restaurantName.trim() || !whatsapp.trim()}
+                  className="w-full bg-gradient-to-r from-red-600 to-orange-500 font-bold py-6 text-white cursor-pointer">
                   Continuar al Paso 2 <ChevronRight className="w-5 h-5 ml-1" />
                 </Button>
               </div>
@@ -1093,41 +1150,30 @@ export default function Dashboard() {
                   <div className="py-12 flex flex-col items-center justify-center text-center space-y-4">
                     <Loader2 className="w-12 h-12 text-orange-500 animate-spin" />
                     <p className="text-lg font-bold">Gemini está analizando tu menú...</p>
-                    <p className="text-sm text-slate-400 bg-slate-950/60 px-4 py-2 rounded-xl animate-pulse">
-                      {iaProgress}
-                    </p>
+                    <p className="text-sm text-slate-400 bg-slate-950/60 px-4 py-2 rounded-xl animate-pulse">{iaProgress}</p>
                   </div>
                 ) : (
                   <div className="space-y-6">
                     <div className="border-2 border-dashed border-slate-800 rounded-3xl p-8 text-center bg-slate-950/50 hover:border-orange-500/50 transition-colors relative group">
-                      <input 
-                        type="file"
-                        multiple
-                        accept="image/*,application/pdf"
-                        onChange={(e) => setMenuFiles(Array.from(e.target.files || []))}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                      />
+                      <input type="file" multiple accept="image/*,application/pdf" onChange={(e) => setMenuFiles(Array.from(e.target.files || []))} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                       <div className="flex flex-col items-center justify-center space-y-3">
                         <Upload className="w-12 h-12 text-slate-500 group-hover:text-orange-500 transition-colors" />
                         <p className="font-semibold text-white">Haz clic o arrastra una o varias imágenes/PDF</p>
-                        <p className="text-xs text-slate-500">Soporta JPG, PNG y PDF. Puedes subir varias páginas o varios menús para unirlos en uno solo.</p>
+                        <p className="text-xs text-slate-500">Soporta JPG, PNG y PDF. Puedes subir varias páginas.</p>
                       </div>
                     </div>
 
                     {menuFiles.length > 0 && (
                       <div className="space-y-3">
                         {menuFiles.map((file, index) => (
-                          <div key={`${file.name}-${index}`} className="bg-slate-950/80 border border-slate-850 p-4 rounded-xl flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                              <Package className="w-8 h-8 text-orange-500" />
-                              <div className="text-left">
-                                <p className="font-semibold text-sm max-w-[200px] truncate">{file.name}</p>
-                                <p className="text-xs text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
-                              </div>
+                          <div key={`${file.name}-${index}`} className="bg-slate-950/80 border border-slate-850 p-4 rounded-xl flex items-center gap-3">
+                            <Package className="w-8 h-8 text-orange-500" />
+                            <div>
+                              <p className="font-semibold text-sm max-w-[200px] truncate">{file.name}</p>
+                              <p className="text-xs text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
                             </div>
                           </div>
                         ))}
-
                         <button onClick={() => setMenuFiles([])} className="text-xs text-red-400 hover:text-red-300 font-semibold cursor-pointer">
                           Quitar todas
                         </button>
@@ -1135,14 +1181,8 @@ export default function Dashboard() {
                     )}
 
                     <div className="flex gap-3">
-                      <Button variant="outline" onClick={() => setOnboardingStep(1)} className="border-slate-800 text-slate-300 cursor-pointer">
-                        Atrás
-                      </Button>
-                      <Button 
-                        onClick={handleAnalyzeMenu}
-                        disabled={!menuFiles.length || isExtracting}
-                        className="flex-1 bg-gradient-to-r from-red-600 to-orange-500 font-bold text-white cursor-pointer"
-                      >
+                      <Button variant="outline" onClick={() => setOnboardingStep(1)} className="border-slate-800 text-slate-300 cursor-pointer">Atrás</Button>
+                      <Button onClick={handleAnalyzeMenu} disabled={!menuFiles.length || isExtracting} className="flex-1 bg-gradient-to-r from-red-600 to-orange-500 font-bold text-white cursor-pointer">
                         Analizar con IA <ChevronRight className="w-5 h-5 ml-1" />
                       </Button>
                     </div>
@@ -1155,76 +1195,35 @@ export default function Dashboard() {
               <div className="bg-slate-900/60 border border-slate-850 p-8 rounded-3xl space-y-6">
                 <div>
                   <h2 className="text-2xl font-bold">Paso 3: Revisa y confirma tus productos</h2>
-                  <p className="text-slate-400 mt-1">La IA detectó estos platos y precios. Puedes corregirlos o agregar más antes de publicar.</p>
+                  <p className="text-slate-400 mt-1">La IA detectó estos platos. Puedes corregirlos antes de publicar.</p>
                 </div>
-
                 <div className="space-y-4 max-h-[40vh] overflow-y-auto pr-2 scrollbar-hide">
                   {parsedProducts.map((p, index) => (
                     <div key={index} className="bg-slate-950 p-4 rounded-xl border border-slate-850 grid grid-cols-1 sm:grid-cols-4 gap-3 relative">
                       <div className="sm:col-span-2">
                         <label className="text-[10px] text-slate-500 uppercase font-bold block mb-1">Nombre</label>
-                        <input 
-                          value={p.name}
-                          onChange={(e) => {
-                            const updated = [...parsedProducts];
-                            updated[index].name = e.target.value;
-                            setParsedProducts(updated);
-                          }}
-                          className="w-full bg-slate-900 border border-slate-850 px-3 py-1.5 rounded-lg text-sm text-white"
-                        />
+                        <input value={p.name} onChange={(e) => { const u = [...parsedProducts]; u[index].name = e.target.value; setParsedProducts(u); }} className="w-full bg-slate-900 border border-slate-850 px-3 py-1.5 rounded-lg text-sm text-white" />
                       </div>
                       <div>
                         <label className="text-[10px] text-slate-500 uppercase font-bold block mb-1">Precio</label>
-                        <input 
-                          type="number"
-                          value={p.price}
-                          onChange={(e) => {
-                            const updated = [...parsedProducts];
-                            updated[index].price = Number(e.target.value);
-                            setParsedProducts(updated);
-                          }}
-                          className="w-full bg-slate-900 border border-slate-850 px-3 py-1.5 rounded-lg text-sm text-white"
-                        />
+                        <input type="number" value={p.price} onChange={(e) => { const u = [...parsedProducts]; u[index].price = Number(e.target.value); setParsedProducts(u); }} className="w-full bg-slate-900 border border-slate-850 px-3 py-1.5 rounded-lg text-sm text-white" />
                       </div>
                       <div>
                         <label className="text-[10px] text-slate-500 uppercase font-bold block mb-1">Categoría</label>
-                        <input 
-                          value={p.category}
-                          onChange={(e) => {
-                            const updated = [...parsedProducts];
-                            updated[index].category = e.target.value;
-                            setParsedProducts(updated);
-                          }}
-                          className="w-full bg-slate-900 border border-slate-850 px-3 py-1.5 rounded-lg text-sm text-white"
-                        />
+                        <input value={p.category} onChange={(e) => { const u = [...parsedProducts]; u[index].category = e.target.value; setParsedProducts(u); }} className="w-full bg-slate-900 border border-slate-850 px-3 py-1.5 rounded-lg text-sm text-white" />
                       </div>
-                      <button 
-                        onClick={() => setParsedProducts(parsedProducts.filter((_, i) => i !== index))}
-                        className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-red-600 border border-red-500 text-white flex items-center justify-center hover:bg-red-500 transition-colors shadow-md text-xs font-bold cursor-pointer"
-                      >
-                        ×
-                      </button>
+                      <button onClick={() => setParsedProducts(parsedProducts.filter((_, i) => i !== index))} className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-red-600 border border-red-500 text-white flex items-center justify-center hover:bg-red-500 transition-colors shadow-md text-xs font-bold cursor-pointer">×</button>
                     </div>
                   ))}
                 </div>
 
                 <div className="flex justify-between items-center py-2 gap-3 flex-wrap">
                   <div className="flex items-center gap-3 flex-wrap">
-                    <button 
-                      onClick={() => setParsedProducts([...parsedProducts, { name: '', price: 0, category: 'Varios', description: '' }])}
-                      className="text-xs text-orange-500 hover:text-orange-400 font-bold flex items-center gap-1 cursor-pointer"
-                    >
+                    <button onClick={() => setParsedProducts([...parsedProducts, { name: '', price: 0, category: 'Varios', description: '' }])} className="text-xs text-orange-500 hover:text-orange-400 font-bold flex items-center gap-1 cursor-pointer">
                       <Plus className="w-4 h-4" /> Agregar Plato Manual
                     </button>
-
                     <label className="text-xs text-sky-400 hover:text-sky-300 font-bold flex items-center gap-1 cursor-pointer">
-                      <input
-                        type="file"
-                        multiple
-                        accept="image/*,application/pdf"
-                        className="hidden"
-                        onChange={handleAddProductsFromImages}
-                      />
+                      <input type="file" multiple accept="image/*,application/pdf" className="hidden" onChange={handleAddProductsFromImages} />
                       <Upload className="w-4 h-4" /> Agregar platos por imagen/PDF
                     </label>
                   </div>
@@ -1232,21 +1231,14 @@ export default function Dashboard() {
                 </div>
 
                 <div className="flex gap-3">
-                  <Button variant="outline" onClick={() => setOnboardingStep(2)} className="border-slate-800 text-slate-300 cursor-pointer">
-                    Atrás
-                  </Button>
-                  <Button 
-                    onClick={handlePublishMenu}
-                    className="flex-1 bg-gradient-to-r from-red-600 to-orange-500 font-bold text-white cursor-pointer"
-                  >
-                    ¡Crear mi Menú Digital! 🚀
-                  </Button>
+                  <Button variant="outline" onClick={() => setOnboardingStep(2)} className="border-slate-800 text-slate-300 cursor-pointer">Atrás</Button>
+                  <Button onClick={handlePublishMenu} className="flex-1 bg-gradient-to-r from-red-600 to-orange-500 font-bold text-white cursor-pointer">¡Crear mi Menú Digital! 🚀</Button>
                 </div>
               </div>
             )}
           </div>
         </main>
-        
+
         <footer className="py-6 text-center text-xs text-slate-600 border-t border-slate-900">
           MenusInteligentes © {new Date().getFullYear()}
         </footer>
@@ -1254,13 +1246,13 @@ export default function Dashboard() {
     );
   }
 
-  // ================= MAIN SAAS DASHBOARD UI =================
+  // ─── MAIN DASHBOARD ──────────────────────────────────────────────────────
   const wizardProducts = products.filter(p => !p.image_url);
 
   return (
     <div className="min-h-screen bg-slate-950 text-white font-sans flex">
-      {/* Sidebar Layout */}
-      <aside className="w-64 border-r border-slate-900 bg-slate-950 flex flex-col justify-between hidden md:flex">
+      {/* Sidebar */}
+      <aside className="w-64 border-r border-slate-900 bg-slate-950 flex-col justify-between hidden md:flex">
         <div className="p-6">
           <div className="flex items-center gap-2 mb-8">
             <div className="w-8 h-8 rounded-lg bg-orange-500 flex items-center justify-center">
@@ -1270,30 +1262,20 @@ export default function Dashboard() {
           </div>
 
           <nav className="space-y-1">
-            <button 
-              onClick={() => setActiveTab('overview')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
-                activeTab === 'overview' ? 'bg-orange-500/10 text-orange-500 border-l-4 border-orange-500' : 'text-slate-400 hover:text-white hover:bg-slate-900'
-              }`}
-            >
-              <QrCode className="w-5 h-5" /> Mi Menú & QR
-            </button>
-            <button 
-              onClick={() => setActiveTab('products')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
-                activeTab === 'products' ? 'bg-orange-500/10 text-orange-500 border-l-4 border-orange-500' : 'text-slate-400 hover:text-white hover:bg-slate-900'
-              }`}
-            >
-              <Package className="w-5 h-5" /> Productos ({products.length})
-            </button>
-            <button 
-              onClick={() => setActiveTab('settings')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-colors cursor-pointer ${
-                activeTab === 'settings' ? 'bg-orange-500/10 text-orange-500 border-l-4 border-orange-500' : 'text-slate-400 hover:text-white hover:bg-slate-900'
-              }`}
-            >
-              <Settings className="w-5 h-5" /> Configuración
-            </button>
+            {([
+              { id: 'overview', icon: QrCode, label: 'Mi Menú & QR' },
+              { id: 'products', icon: Package, label: `Productos (${products.length})` },
+              { id: 'groups', icon: Layers, label: `Grupos (${customizationGroups.length})` },
+              { id: 'settings', icon: Settings, label: 'Configuración' },
+            ] as const).map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-colors cursor-pointer ${activeTab === tab.id ? 'bg-orange-500/10 text-orange-500 border-l-4 border-orange-500' : 'text-slate-400 hover:text-white hover:bg-slate-900'}`}
+              >
+                <tab.icon className="w-5 h-5" /> {tab.label}
+              </button>
+            ))}
           </nav>
         </div>
 
@@ -1310,7 +1292,7 @@ export default function Dashboard() {
         </div>
       </aside>
 
-      {/* Main Content Area */}
+      {/* Main Content */}
       <main className="flex-1 flex flex-col bg-slate-950 overflow-y-auto">
         <header className="h-20 border-b border-slate-900 bg-slate-950/50 backdrop-blur-sm flex items-center justify-between px-8">
           <div className="flex items-center gap-3 text-left">
@@ -1320,41 +1302,28 @@ export default function Dashboard() {
             <h1 className="text-xl font-bold">{profile.name}</h1>
           </div>
           <div className="flex items-center gap-4">
-            <span className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 ${
-              profile.is_open ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'
-            }`}>
+            <span className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 ${profile.is_open ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
               <span className={`w-2 h-2 rounded-full ${profile.is_open ? 'bg-emerald-400' : 'bg-red-400'}`} />
               {profile.is_open ? 'Abierto' : 'Cerrado'}
             </span>
-            <a 
-              href={`/menu/${profile.slug}`} 
-              target="_blank" 
-              className="text-xs font-semibold text-slate-400 hover:text-white border border-slate-880 px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors"
-            >
+            <a href={`/menu/${profile.slug}`} target="_blank"
+              className="text-xs font-semibold text-slate-400 hover:text-white border border-slate-800 px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors">
               <Eye className="w-4 h-4" /> Ver Menú Público
             </a>
           </div>
         </header>
 
-        {/* Tab Content */}
         <div className="p-8 max-w-5xl w-full mx-auto">
-          {/* TAB 1: OVERVIEW / QR */}
+          {/* ─── TAB: OVERVIEW ─── */}
           {activeTab === 'overview' && (
             <div className="grid md:grid-cols-2 gap-8">
               <div className="bg-slate-900 border border-slate-850 p-8 rounded-3xl flex flex-col items-center text-center space-y-6 shadow-xl">
                 <h3 className="text-xl font-bold">Código QR de tu Menú</h3>
-                
                 <div className="w-56 h-56 bg-white p-3 rounded-2xl shadow-inner flex items-center justify-center">
-                  <img 
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(publicUrl)}`} 
-                    alt="QR Code"
-                    className="w-full h-full"
-                  />
+                  <img src={`https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(publicUrl)}`} alt="QR Code" className="w-full h-full" />
                 </div>
-
                 <div className="w-full space-y-3">
                   <p className="text-xs text-slate-400">Escanea o descarga este código QR para colocar en mesas, flyers o domicilios.</p>
-                  
                   <div className="flex gap-2">
                     <Button onClick={handleCopyLink} variant="outline" className="flex-1 border-slate-800 text-slate-300 text-xs">
                       {copied ? <Check className="w-4 h-4 mr-1 text-emerald-500" /> : <Copy className="w-4 h-4 mr-1" />}
@@ -1368,7 +1337,6 @@ export default function Dashboard() {
               </div>
 
               <div className="space-y-6">
-                {/* Panel de Estadísticas Rápidas */}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-slate-900 border border-slate-850 p-5 rounded-2xl flex items-center gap-3">
                     <div className="w-10 h-10 rounded-lg bg-orange-500/10 text-orange-500 flex items-center justify-center flex-shrink-0">
@@ -1390,70 +1358,40 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                {/* Siguientes Tareas (Checklist de Configuración) */}
                 <div className="bg-slate-900 border border-slate-850 p-6 rounded-3xl space-y-5 text-left shadow-xl">
                   <div>
-                    <h3 className="font-extrabold text-base text-white flex items-center gap-2">
-                      <span>📋 Siguientes tareas sugeridas</span>
-                    </h3>
-                    <p className="text-xs text-slate-400 mt-1">Completa estos pasos para que tu menú digital luzca profesional.</p>
+                    <h3 className="font-extrabold text-base text-white flex items-center gap-2">📋 Siguientes tareas sugeridas</h3>
+                    <p className="text-xs text-slate-400 mt-1">Completa estos pasos para que tu menú luzca profesional.</p>
                   </div>
-
                   <div className="space-y-4">
-                    {/* Tarea 1: Organizar las fotos */}
-                    <div className="p-4 bg-slate-950/80 border border-slate-850 rounded-2xl space-y-3 relative overflow-hidden">
-                      <div className="flex items-start justify-between">
-                        <div className="space-y-1">
-                          <span className="text-[10px] uppercase font-bold text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded-full">Tarea 1</span>
-                          <h4 className="font-bold text-sm text-white mt-1">Organizar las fotos de tu menú</h4>
-                          <p className="text-xs text-slate-400 leading-relaxed">
-                            Configura fotos reales o de stock organizadas sección por sección (ej: Entradas, Bebidas).
-                          </p>
-                        </div>
+                    <div className="p-4 bg-slate-950/80 border border-slate-850 rounded-2xl space-y-3">
+                      <div className="space-y-1">
+                        <span className="text-[10px] uppercase font-bold text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded-full">Tarea 1</span>
+                        <h4 className="font-bold text-sm text-white mt-1">Organizar las fotos de tu menú</h4>
+                        <p className="text-xs text-slate-400 leading-relaxed">Configura fotos reales o de stock organizadas sección por sección.</p>
                       </div>
-                      <Button 
-                        onClick={() => {
-                          setWizardSelectedCategory(null);
-                          setCurrentWizardIndex(0);
-                          setIsPhotoWizardOpen(true);
-                        }}
-                        className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs py-4 cursor-pointer"
-                      >
+                      <Button onClick={() => { setWizardSelectedCategory(null); setCurrentWizardIndex(0); setIsPhotoWizardOpen(true); }}
+                        className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs py-4 cursor-pointer">
                         Organizar Fotos por Sección
                       </Button>
                     </div>
 
-                    {/* Tarea 2: Organizar tus secciones */}
-                    <div className="p-4 bg-slate-950/80 border border-slate-850 rounded-2xl space-y-3 relative overflow-hidden">
-                      <div className="flex items-start justify-between">
-                        <div className="space-y-1">
-                          <span className="text-[10px] uppercase font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full">Tarea 2</span>
-                          <h4 className="font-bold text-sm text-white mt-1">Organizar tus secciones / categorías</h4>
-                          <p className="text-xs text-slate-400 leading-relaxed">
-                            Organiza y arrastra el orden de tus secciones (ej: 1. Entradas, 2. Platos Fuertes).
-                          </p>
-                        </div>
+                    <div className="p-4 bg-slate-950/80 border border-slate-850 rounded-2xl space-y-3">
+                      <div className="space-y-1">
+                        <span className="text-[10px] uppercase font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full">Tarea 2</span>
+                        <h4 className="font-bold text-sm text-white mt-1">Organizar tus secciones / categorías</h4>
+                        <p className="text-xs text-slate-400 leading-relaxed">Organiza el orden de tus secciones (ej: 1. Entradas, 2. Platos Fuertes).</p>
                       </div>
-                      <Button 
-                        onClick={handleOpenOrderCategories}
-                        variant="outline"
-                        className="w-full border-slate-850 hover:bg-slate-850 text-slate-300 font-bold text-xs py-4 cursor-pointer"
-                      >
+                      <Button onClick={handleOpenOrderCategories} variant="outline" className="w-full border-slate-850 hover:bg-slate-850 text-slate-300 font-bold text-xs py-4 cursor-pointer">
                         Organizar Orden de Secciones
                       </Button>
                     </div>
 
-                    {/* Tarea de Limpieza Opcional */}
                     {products.some(p => p.image_url && p.image_url.trim() !== '' && p.image_url !== 'null') && (
                       <div className="p-4 bg-red-950/10 border border-red-950/30 rounded-2xl space-y-2 text-left">
                         <h4 className="font-bold text-xs text-red-400">¿Deseas que tu menú no tenga ninguna imagen?</h4>
-                        <p className="text-[11px] text-slate-400 leading-relaxed">
-                          Si prefieres un estilo minimalista limpio con solo nombres y precios, puedes limpiar todas las imágenes de un solo clic.
-                        </p>
-                        <button
-                          onClick={handleClearAllPhotos}
-                          className="text-xs text-red-450 hover:text-red-400 font-bold underline cursor-pointer"
-                        >
+                        <p className="text-[11px] text-slate-400 leading-relaxed">Si prefieres un estilo minimalista, puedes limpiar todas las imágenes de un solo clic.</p>
+                        <button onClick={handleClearAllPhotos} className="text-xs text-red-400 hover:text-red-300 font-bold underline cursor-pointer">
                           Eliminar todas las fotos del menú
                         </button>
                       </div>
@@ -1464,145 +1402,54 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* TAB 2: PRODUCTS TABLE */}
+          {/* ─── TAB: PRODUCTS ─── */}
           {activeTab === 'products' && (
             <div className="space-y-6">
               <div className="flex justify-between items-center">
                 <h3 className="text-lg font-bold">Listado de Platos y Productos</h3>
                 <div className="flex gap-2">
-                  <Button 
-                    onClick={handleOpenOrderCategories} 
-                    variant="outline"
-                    className="border-slate-800 text-slate-300 text-xs"
-                  >
+                  <Button onClick={handleOpenOrderCategories} variant="outline" className="border-slate-800 text-slate-300 text-xs">
                     <Palette className="w-4 h-4 mr-1 text-orange-500" /> Ordenar Secciones
                   </Button>
-                  <Button 
-                    onClick={() => {
-                      setEditingProduct(null);
-                      setProdName('');
-                      setProdDesc('');
-                      setProdCustomizationTitle('');
-                      setProdCustomizationDescription('');
-                      setProdCustomizationGroups([]);
-                      setProdPrice(0);
-                      setProdCategory(orderedCategories[0] || 'Platos');
-                      setProdAvailable(true);
-                      setProdError(null);
-                      setImageFile(null);
-                      setSelectedStockUrl('');
-                      setIsAddingProduct(true);
-                    }}
-                    className="bg-orange-500 text-white font-bold text-xs"
-                  >
+                  <Button onClick={() => openProductForm(null)} className="bg-orange-500 text-white font-bold text-xs">
                     <Plus className="w-4 h-4 mr-1" /> Agregar Producto
                   </Button>
                 </div>
               </div>
 
               <div className="space-y-8">
-                {orderedCategories.map((cat, catIdx) => {
+                {orderedCategories.map((cat) => {
                   const catProducts = getProductsForCategory(cat);
                   return (
                     <div key={cat} className="space-y-3">
                       <h4 className="font-bold text-slate-300 border-b border-slate-900 pb-2 text-md flex items-center justify-between">
-                        <span>{catIdx + 1}. {cat}</span>
+                        <span>{cat}</span>
                         <span className="text-xs text-slate-500 font-normal">{catProducts.length} productos</span>
                       </h4>
-                      <div className="grid gap-3">
-                        {catProducts.map(p => (
-                          <div 
-                            key={p.id} 
-                            draggable
-                            onDragStart={() => setDraggedProductId(p.id)}
-                            onDragOver={(event) => event.preventDefault()}
-                            onDrop={async () => {
-                              if (!draggedProductId || draggedProductId === p.id) return;
-                              await reorderProductsInCategory(cat, draggedProductId, p.id);
-                              setDraggedProductId(null);
-                            }}
-                            onDragEnd={() => setDraggedProductId(null)}
-                            className="bg-slate-900/70 border border-slate-850 p-4 rounded-xl flex items-center justify-between gap-4 cursor-grab active:cursor-grabbing"
-                          >
-                            <div className="flex items-center gap-4 flex-1 truncate">
-                              {p.image_url ? (
-                                <img src={p.image_url} alt={p.name} className="w-16 h-16 rounded-lg object-cover flex-shrink-0" />
-                              ) : (
-                                <div className="w-16 h-16 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-center flex-shrink-0 text-slate-500 text-xs font-semibold">
-                                  Sin Foto
-                                </div>
-                              )}
-                              <div className="truncate text-left">
-                                <h5 className="font-bold text-sm text-white truncate">{p.name}</h5>
-                                <p className="text-xs text-slate-400 truncate max-w-[250px]">{p.description}</p>
-                                <span className="text-xs font-bold text-orange-400">{formatPrice(p.price)}</span>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-4">
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[10px] text-slate-500">{p.available ? 'Activo' : 'Pausado'}</span>
-                                <Switch 
-                                  checked={p.available}
-                                  onCheckedChange={() => toggleAvailability(p.id, p.available)}
-                                />
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                <div className="flex flex-col gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => moveProductPosition(p.id, 'up')}
-                                    disabled={getProductsForCategory(p.category).findIndex(item => item.id === p.id) === 0}
-                                    className="p-1.5 rounded bg-slate-950 hover:bg-slate-850 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 cursor-pointer"
-                                    title="Subir"
-                                  >
-                                    <ArrowUp className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => moveProductPosition(p.id, 'down')}
-                                    disabled={getProductsForCategory(p.category).findIndex(item => item.id === p.id) === getProductsForCategory(p.category).length - 1}
-                                    className="p-1.5 rounded bg-slate-950 hover:bg-slate-850 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 cursor-pointer"
-                                    title="Bajar"
-                                  >
-                                    <ArrowDown className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                                <div className="flex gap-1">
-                                  <button 
-                                    onClick={() => {
-                                      const customization = extractProductCustomization(p.description);
-                                      setEditingProduct(p);
-                                      setProdName(p.name);
-                                      setProdDesc(customization.cleanDescription || '');
-                                      setProdCustomizationTitle(customization.config?.title || '');
-                                      setProdCustomizationDescription(customization.config?.description || '');
-                                      hydrateCustomizationState(customization.config);
-                                      setProdPrice(p.price);
-                                      setProdCategory(p.category);
-                                      setProdAvailable(p.available);
-                                      setImageFile(null);
-                                      setSelectedStockUrl(p.image_url || '');
-                                      setProdError(null);
-                                      setIsAddingProduct(true);
-                                    }}
-                                    className="p-2 rounded-lg bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-850 cursor-pointer"
-                                  >
-                                    <Pencil className="w-4 h-4" />
-                                  </button>
-                                  <button 
-                                    onClick={() => handleDeleteProduct(p.id)}
-                                    className="p-2 rounded-lg bg-slate-950 text-red-400 hover:text-red-300 hover:bg-slate-850 cursor-pointer"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
+                      <DndContext
+                        sensors={sensors}
+                        collisionDetection={closestCenter}
+                        onDragEnd={(event) => handleDragEnd(event, cat)}
+                      >
+                        <SortableContext items={catProducts.map(p => p.id)} strategy={verticalListSortingStrategy}>
+                          <div className="grid gap-3">
+                            {catProducts.map(p => (
+                              <SortableProduct
+                                key={p.id}
+                                product={p}
+                                catProducts={catProducts}
+                                formatPrice={formatPrice}
+                                onEdit={openProductForm}
+                                onDelete={handleDeleteProduct}
+                                onDuplicate={handleDuplicateProduct}
+                                onMoveCategory={(prod) => { setMovingProduct(prod); setMoveTargetCategory(prod.category); }}
+                                onMovePosition={moveProductPosition}
+                                toggleAvailability={toggleAvailability}
+                              />
+                            ))}
                           </div>
-                        ))}
-                      </div>
+                        </SortableContext>
+                      </DndContext>
                     </div>
                   );
                 })}
@@ -1616,7 +1463,73 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* TAB 3: SETTINGS */}
+          {/* ─── TAB: GROUPS ─── */}
+          {activeTab === 'groups' && (
+            <div className="space-y-6">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h3 className="text-lg font-bold">Grupos de Personalización</h3>
+                  <p className="text-sm text-slate-400 mt-1">Crea grupos reutilizables (Salsas, Tamaño, Extras…) y asígnalos a múltiples platos.</p>
+                </div>
+                <Button onClick={() => openGroupEditor(null)} className="bg-orange-500 text-white font-bold text-xs">
+                  <Plus className="w-4 h-4 mr-1" /> Crear Grupo
+                </Button>
+              </div>
+
+              {customizationGroups.length === 0 ? (
+                <div className="text-center py-16 bg-slate-900 rounded-3xl border border-dashed border-slate-800 text-slate-500 text-sm space-y-3">
+                  <Layers className="w-10 h-10 mx-auto text-slate-700" />
+                  <p>Aún no tienes grupos de personalización.</p>
+                  <p className="text-xs">Crea grupos como "Elige tu salsa", "Tamaño", "Extras", etc. y después asígnalos a tus platos.</p>
+                </div>
+              ) : (
+                <div className="grid gap-4">
+                  {customizationGroups.map(group => {
+                    return (
+                      <div key={group.id} className="bg-slate-900 border border-slate-850 p-5 rounded-2xl">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h4 className="font-bold text-white">{group.name}</h4>
+                              {group.required && (
+                                <span className="text-[10px] bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2 py-0.5 rounded-full font-bold">Obligatorio</span>
+                              )}
+                              <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-semibold">
+                                {group.min_selections === 0 ? 'Opcional' : `Mín. ${group.min_selections}`} · Máx. {group.max_selections}
+                              </span>
+                            </div>
+                            {group.description && <p className="text-xs text-slate-400 mt-1">{group.description}</p>}
+
+                            {/* Opciones */}
+                            <div className="flex flex-wrap gap-1.5 mt-3">
+                              {(group.options || []).map(opt => (
+                                <span key={opt.id} className="text-xs bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-full text-slate-300">
+                                  {opt.label}{opt.price > 0 ? ` +${formatPrice(opt.price)}` : ''}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2 flex-shrink-0">
+                            <button onClick={() => openGroupEditor(group)}
+                              className="p-2 rounded-lg bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-850 cursor-pointer" title="Editar grupo">
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                            <button onClick={() => handleDeleteGroup(group.id)}
+                              className="p-2 rounded-lg bg-slate-950 text-red-400 hover:text-red-300 hover:bg-slate-850 cursor-pointer" title="Eliminar grupo">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ─── TAB: SETTINGS ─── */}
           {activeTab === 'settings' && (
             <div className="bg-slate-900 border border-slate-850 p-8 rounded-3xl space-y-6 max-w-2xl text-left">
               <div>
@@ -1625,62 +1538,38 @@ export default function Dashboard() {
               </div>
 
               <div className="space-y-4">
-                {/* LOGO UPLOADER IN SETTINGS */}
                 <div className="flex flex-col items-center space-y-3 p-4 bg-slate-950 border border-slate-850 rounded-2xl">
                   {settingsLogoUploading ? (
                     <div className="w-20 h-20 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center">
                       <Loader2 className="w-6 h-6 text-orange-500 animate-spin" />
                     </div>
                   ) : profile.logo_url ? (
-                    <img 
-                      src={profile.logo_url} 
-                      alt="Logo Restaurante" 
-                      className="w-20 h-20 rounded-full object-cover border-2 border-orange-500 shadow-md"
-                    />
+                    <img src={profile.logo_url} alt="Logo Restaurante" className="w-20 h-20 rounded-full object-cover border-2 border-orange-500 shadow-md" />
                   ) : (
                     <div className="w-20 h-20 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500">
                       <Store className="w-8 h-8" />
                     </div>
                   )}
                   <div className="flex flex-col items-center gap-1.5 w-full">
-                    <Button 
-                      type="button" 
-                      variant="outline" 
-                      className="border-slate-850 text-xs text-slate-300 relative group cursor-pointer w-full"
-                      disabled={settingsLogoUploading}
-                    >
+                    <Button type="button" variant="outline" className="border-slate-850 text-xs text-slate-300 relative group cursor-pointer w-full" disabled={settingsLogoUploading}>
                       <Upload className="w-4 h-4 mr-1 text-orange-500" /> {profile.logo_url ? 'Cambiar Logo' : 'Subir Logo'}
-                      <input 
-                        type="file" 
-                        accept="image/*"
-                        onChange={handleSettingsLogoChange}
-                        className="absolute inset-0 opacity-0 cursor-pointer"
-                        disabled={settingsLogoUploading}
-                      />
+                      <input type="file" accept="image/*" onChange={handleSettingsLogoChange} className="absolute inset-0 opacity-0 cursor-pointer" disabled={settingsLogoUploading} />
                     </Button>
                     {profile.logo_url && (
-                      <button 
-                        type="button"
-                        onClick={async () => {
-                          if (!confirm('¿Estás seguro de eliminar el logo?')) return;
-                          setSettingsLogoUploading(true);
-                          try {
-                            const { error } = await supabase
-                              .from('profiles')
-                              .update({ logo_url: null })
-                              .eq('id', user.id);
-                            if (error) throw error;
-                            setProfile({ ...profile, logo_url: null });
-                            alert('Logo eliminado correctamente.');
-                          } catch (err: any) {
-                            alert('Error al eliminar logo: ' + err.message);
-                          } finally {
-                            setSettingsLogoUploading(false);
-                          }
-                        }}
-                        className="text-[10px] text-red-450 hover:text-red-400 font-bold transition-colors cursor-pointer mt-1"
-                        disabled={settingsLogoUploading}
-                      >
+                      <button type="button" onClick={async () => {
+                        if (!confirm('¿Estás seguro de eliminar el logo?')) return;
+                        setSettingsLogoUploading(true);
+                        try {
+                          const { error } = await supabase.from('profiles').update({ logo_url: null }).eq('id', user.id);
+                          if (error) throw error;
+                          setProfile({ ...profile, logo_url: null });
+                          alert('Logo eliminado correctamente.');
+                        } catch (err: any) {
+                          alert('Error al eliminar logo: ' + err.message);
+                        } finally {
+                          setSettingsLogoUploading(false);
+                        }
+                      }} className="text-[10px] text-red-400 hover:text-red-300 font-bold transition-colors cursor-pointer mt-1" disabled={settingsLogoUploading}>
                         Quitar Logo
                       </button>
                     )}
@@ -1689,29 +1578,15 @@ export default function Dashboard() {
 
                 <div>
                   <label className="text-xs font-semibold text-slate-300 block mb-2">Nombre del Restaurante</label>
-                  <Input 
-                    value={profile.name}
-                    onChange={(e) => setProfile({ ...profile, name: e.target.value })}
-                    className="bg-slate-950 border-slate-850 text-white"
-                  />
+                  <Input value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} className="bg-slate-950 border-slate-850 text-white" />
                 </div>
-
                 <div>
                   <label className="text-xs font-semibold text-slate-300 block mb-2">Slug (URL única)</label>
-                  <Input 
-                    value={profile.slug}
-                    disabled
-                    className="bg-slate-950/50 border-slate-850 text-slate-500"
-                  />
+                  <Input value={profile.slug} disabled className="bg-slate-950/50 border-slate-850 text-slate-500" />
                 </div>
-
                 <div>
                   <label className="text-xs font-semibold text-slate-300 block mb-2">Número de WhatsApp</label>
-                  <Input 
-                    value={profile.whatsapp}
-                    onChange={(e) => setProfile({ ...profile, whatsapp: e.target.value })}
-                    className="bg-slate-950 border-slate-850 text-white"
-                  />
+                  <Input value={profile.whatsapp} onChange={(e) => setProfile({ ...profile, whatsapp: e.target.value })} className="bg-slate-950 border-slate-850 text-white" />
                 </div>
 
                 <div className="space-y-3 rounded-2xl border border-slate-850 bg-slate-950/70 p-4">
@@ -1721,67 +1596,36 @@ export default function Dashboard() {
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-slate-300 block mb-2">Imagen de portada (URL)</label>
-                    <Input
-                      value={profile.menu_cover_image_url || ''}
-                      onChange={(e) => setProfile({ ...profile, menu_cover_image_url: e.target.value })}
-                      placeholder="https://..."
-                      className="bg-slate-950 border-slate-850 text-white"
-                    />
+                    <Input value={profile.menu_cover_image_url || ''} onChange={(e) => setProfile({ ...profile, menu_cover_image_url: e.target.value })} placeholder="https://..." className="bg-slate-950 border-slate-850 text-white" />
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-slate-300 block mb-2">Título de portada</label>
-                    <Input
-                      value={profile.menu_cover_title || ''}
-                      onChange={(e) => setProfile({ ...profile, menu_cover_title: e.target.value })}
-                      placeholder="Ej: Pizzas artesanales"
-                      className="bg-slate-950 border-slate-850 text-white"
-                    />
+                    <Input value={profile.menu_cover_title || ''} onChange={(e) => setProfile({ ...profile, menu_cover_title: e.target.value })} placeholder="Ej: Pizzas artesanales" className="bg-slate-950 border-slate-850 text-white" />
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-slate-300 block mb-2">Descripción de portada</label>
-                    <textarea
-                      value={profile.menu_cover_description || ''}
-                      onChange={(e) => setProfile({ ...profile, menu_cover_description: e.target.value })}
-                      placeholder="Describe lo que vende tu restaurante"
-                      className="w-full bg-slate-950 border border-slate-850 p-3 rounded-xl text-sm focus:outline-none focus:border-orange-500 text-white h-20 resize-none"
-                    />
+                    <textarea value={profile.menu_cover_description || ''} onChange={(e) => setProfile({ ...profile, menu_cover_description: e.target.value })} placeholder="Describe lo que vende tu restaurante" className="w-full bg-slate-950 border border-slate-850 p-3 rounded-xl text-sm focus:outline-none focus:border-orange-500 text-white h-20 resize-none" />
                   </div>
-                  
                 </div>
 
                 <div className="flex items-center justify-between p-4 bg-slate-950 border border-slate-850 rounded-xl">
                   <div>
                     <h5 className="text-sm font-bold">Estado de atención</h5>
-                    <p className="text-xs text-slate-500">Indica a tus clientes si el restaurante está aceptando pedidos.</p>
+                    <p className="text-xs text-slate-500">Indica si el restaurante está aceptando pedidos.</p>
                   </div>
-                  <Switch 
-                    checked={profile.is_open}
-                    onCheckedChange={(checked) => setProfile({ ...profile, is_open: checked })}
-                  />
+                  <Switch checked={profile.is_open} onCheckedChange={(checked) => setProfile({ ...profile, is_open: checked })} />
                 </div>
 
                 <div>
                   <label className="text-xs font-semibold text-slate-300 block mb-2">Color de Marca principal</label>
                   <div className="flex gap-3">
-                    <input 
-                      type="color" 
-                      value={profile.primary_color}
-                      onChange={(e) => setProfile({ ...profile, primary_color: e.target.value })}
-                      className="w-12 h-12 bg-transparent border border-slate-850 rounded-xl cursor-pointer"
-                    />
-                    <Input 
-                      value={profile.primary_color}
-                      onChange={(e) => setProfile({ ...profile, primary_color: e.target.value })}
-                      className="bg-slate-950 border-slate-850 text-white flex-1"
-                    />
+                    <input type="color" value={profile.primary_color} onChange={(e) => setProfile({ ...profile, primary_color: e.target.value })} className="w-12 h-12 bg-transparent border border-slate-850 rounded-xl cursor-pointer" />
+                    <Input value={profile.primary_color} onChange={(e) => setProfile({ ...profile, primary_color: e.target.value })} className="bg-slate-950 border-slate-850 text-white flex-1" />
                   </div>
                 </div>
               </div>
 
-              <Button 
-                onClick={handleSaveSettings}
-                className="bg-orange-500 hover:bg-orange-650 text-white font-bold w-full py-6 cursor-pointer"
-              >
+              <Button onClick={handleSaveSettings} className="bg-orange-500 hover:bg-orange-600 text-white font-bold w-full py-6 cursor-pointer">
                 Guardar Ajustes
               </Button>
             </div>
@@ -1789,7 +1633,7 @@ export default function Dashboard() {
         </div>
       </main>
 
-      {/* DIALOG AGREGAR/EDITAR PRODUCTO */}
+      {/* ─── DIALOG: AGREGAR/EDITAR PRODUCTO ─── */}
       <Dialog open={isAddingProduct} onOpenChange={setIsAddingProduct}>
         <DialogContent className="max-w-md bg-slate-950 border border-slate-850 text-white p-6 max-h-[90vh] overflow-y-auto scrollbar-hide">
           <DialogHeader>
@@ -1804,57 +1648,30 @@ export default function Dashboard() {
           )}
 
           <form onSubmit={handleSaveProduct} className="space-y-4 text-left">
-            {/* Visualización de la imagen actual */}
+            {/* Imagen */}
             <div className="flex flex-col items-center space-y-3 p-4 bg-slate-900 border border-slate-850 rounded-2xl">
               {(selectedStockUrl || imageFile || editingProduct?.image_url) ? (
-                <img 
+                <img
                   src={selectedStockUrl || (imageFile ? URL.createObjectURL(imageFile) : editingProduct?.image_url)}
-                  alt="Vista previa" 
+                  alt="Vista previa"
                   className="w-32 h-32 object-cover rounded-xl shadow-lg border border-slate-800"
                 />
               ) : (
                 <div className="w-32 h-32 rounded-xl bg-slate-950 border border-slate-800 flex flex-col items-center justify-center text-slate-500 text-xs font-semibold gap-1">
-                  <ImageIcon className="w-8 h-8" />
-                  <span>Sin Foto</span>
+                  <ImageIcon className="w-8 h-8" /><span>Sin Foto</span>
                 </div>
               )}
               <div className="flex gap-2 w-full">
-                <Button 
-                  type="button" 
-                  variant="outline" 
-                  className="flex-1 border-slate-850 text-xs text-slate-300 relative group cursor-pointer"
-                >
+                <Button type="button" variant="outline" className="flex-1 border-slate-850 text-xs text-slate-300 relative group cursor-pointer">
                   <Upload className="w-4 h-4 mr-1 text-orange-500" /> Subir Foto
-                  <input 
-                    type="file" 
-                    accept="image/*"
-                    onChange={(e) => {
-                      setImageFile(e.target.files?.[0] || null);
-                      setSelectedStockUrl('');
-                    }}
-                    className="absolute inset-0 opacity-0 cursor-pointer"
-                  />
+                  <input type="file" accept="image/*" onChange={(e) => { setImageFile(e.target.files?.[0] || null); setSelectedStockUrl(''); }} className="absolute inset-0 opacity-0 cursor-pointer" />
                 </Button>
-                <Button 
-                  type="button" 
-                  onClick={() => setShowStockGallery(true)}
-                  className="flex-1 bg-slate-950 border border-slate-850 text-xs font-semibold cursor-pointer"
-                >
+                <Button type="button" onClick={() => setShowStockGallery(true)} className="flex-1 bg-slate-950 border border-slate-850 text-xs font-semibold cursor-pointer">
                   <ImageIcon className="w-4 h-4 mr-1 text-amber-500" /> Galería Stock
                 </Button>
               </div>
               {(imageFile || selectedStockUrl || editingProduct?.image_url) && (
-                <button 
-                  type="button"
-                  onClick={() => {
-                    setImageFile(null);
-                    setSelectedStockUrl('');
-                    if (editingProduct) {
-                      editingProduct.image_url = '';
-                    }
-                  }}
-                  className="text-[10px] text-red-400 hover:text-red-300 font-bold"
-                >
+                <button type="button" onClick={() => { setImageFile(null); setSelectedStockUrl(''); if (editingProduct) editingProduct.image_url = ''; }} className="text-[10px] text-red-400 hover:text-red-300 font-bold">
                   Quitar foto y dejar sin imagen
                 </button>
               )}
@@ -1862,189 +1679,64 @@ export default function Dashboard() {
 
             <div>
               <label className="text-xs font-semibold text-slate-300 block mb-1">Nombre *</label>
-              <Input 
-                required
-                value={prodName}
-                onChange={(e) => setProdName(e.target.value)}
-                placeholder="Ej: Tacos al Pastor"
-                className="bg-slate-900 border-slate-850 text-white"
-              />
+              <Input required value={prodName} onChange={(e) => setProdName(e.target.value)} placeholder="Ej: Tacos al Pastor" className="bg-slate-900 border-slate-850 text-white" />
             </div>
 
             <div>
               <label className="text-xs font-semibold text-slate-300 block mb-1">Descripción</label>
-              <textarea 
-                value={prodDesc}
-                onChange={(e) => setProdDesc(e.target.value)}
-                placeholder="Ingredientes o descripción..."
-                className="w-full bg-slate-900 border border-slate-850 p-3 rounded-xl text-sm focus:outline-none focus:border-orange-500 text-white h-20 resize-none"
-              />
+              <textarea value={prodDesc} onChange={(e) => setProdDesc(e.target.value)} placeholder="Ingredientes o descripción..." className="w-full bg-slate-900 border border-slate-850 p-3 rounded-xl text-sm focus:outline-none focus:border-orange-500 text-white h-20 resize-none" />
             </div>
 
+            {/* Grupos de personalización */}
             <div className="space-y-3 rounded-2xl border border-slate-850 bg-slate-900/50 p-4">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center justify-between">
                 <div>
-                  <label className="text-xs font-semibold text-slate-300 block mb-0.5">Opciones de personalización</label>
-                  <p className="text-[11px] text-slate-500">Define sabores, toppings o características para este producto.</p>
+                  <label className="text-xs font-semibold text-slate-300 block mb-0.5">Grupos de personalización</label>
+                  <p className="text-[11px] text-slate-500">Selecciona los grupos globales que aplican a este producto.</p>
                 </div>
-                <Button
+                <button
                   type="button"
-                  onClick={addCustomizationGroup}
-                  className="bg-slate-950 border border-slate-800 text-white text-[10px] font-bold cursor-pointer"
+                  onClick={() => { setIsAddingProduct(false); setActiveTab('groups'); openGroupEditor(null); }}
+                  className="text-[10px] text-orange-400 hover:text-orange-300 font-bold cursor-pointer whitespace-nowrap"
                 >
-                  + Agregar grupo
-                </Button>
+                  + Crear grupo
+                </button>
               </div>
 
-              <div>
-                <label className="text-[11px] font-semibold text-slate-300 block mb-1">Título general</label>
-                <Input
-                  value={prodCustomizationTitle}
-                  onChange={(e) => setProdCustomizationTitle(e.target.value)}
-                  placeholder="Ej: Elige tus sabores"
-                  className="bg-slate-950 border-slate-850 text-white"
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] font-semibold text-slate-300 block mb-1">Descripción general</label>
-                <textarea
-                  value={prodCustomizationDescription}
-                  onChange={(e) => setProdCustomizationDescription(e.target.value)}
-                  placeholder="Ej: Selecciona hasta 2 sabores para tu pizza."
-                  className="w-full bg-slate-950 border border-slate-850 p-3 rounded-xl text-sm focus:outline-none focus:border-orange-500 text-white h-20 resize-none"
-                />
-              </div>
-
-              {prodCustomizationGroups.length === 0 ? (
+              {customizationGroups.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-slate-800 bg-slate-950/60 p-4 text-center text-[11px] text-slate-500">
-                  Aún no agregas grupos de personalización. Haz clic en “Agregar grupo”.
+                  No hay grupos creados aún. Ve a la pestaña "Grupos" para crear uno.
                 </div>
               ) : (
-                <div className="space-y-3">
-                  {prodCustomizationGroups.map((group, groupIndex) => (
-                    <div key={group.id} className="rounded-xl border border-slate-850 bg-slate-950/70 p-3 space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[10px] font-bold uppercase tracking-wide text-orange-400">Grupo {groupIndex + 1}</span>
-                        <button
-                          type="button"
-                          onClick={() => removeCustomizationGroup(group.id)}
-                          className="text-[10px] text-red-400 hover:text-red-300 font-bold cursor-pointer"
-                        >
-                          Eliminar grupo
-                        </button>
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-3">
-                        <div>
-                          <label className="text-[10px] font-semibold text-slate-300 block mb-1">Nombre</label>
-                          <Input
-                            value={group.label}
-                            onChange={(e) => setProdCustomizationGroups(prev => prev.map(item => item.id === group.id ? { ...item, label: e.target.value } : item))}
-                            placeholder="Ej: Sabores"
-                            className="bg-slate-900 border-slate-850 text-white"
-                          />
-                        </div>
-                        <div className="flex items-center justify-between p-2 bg-slate-900 border border-slate-850 rounded-xl">
-                          <div>
-                            <p className="text-[10px] font-bold text-white">Obligatorio</p>
-                            <p className="text-[9px] text-slate-500">Requerido</p>
-                          </div>
-                          <Switch
-                            checked={group.required}
-                            onCheckedChange={(checked) => setProdCustomizationGroups(prev => prev.map(item => item.id === group.id ? { ...item, required: checked } : item))}
-                          />
-                        </div>
-                        <div className="flex items-center justify-between p-2 bg-slate-900 border border-slate-850 rounded-xl">
-                          <div>
-                            <p className="text-[10px] font-bold text-white">Permitir selección múltiple</p>
-                            <p className="text-[9px] text-slate-500">Activa para elegir varios</p>
-                          </div>
-                          <Switch
-                            checked={Number(group.maxSelections || 1) > 1}
-                            onCheckedChange={(checked) => setProdCustomizationGroups(prev => prev.map(item => {
-                              if (item.id !== group.id) return item;
-                              return {
-                                ...item,
-                                maxSelections: checked ? Math.max(2, Number(item.maxSelections || 2)) : 1,
-                                minSelections: checked ? Math.max(1, Number(item.minSelections || 1)) : Math.min(1, Number(item.minSelections || 1)),
-                              };
-                            }))}
-                          />
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="text-[10px] font-semibold text-slate-300 block mb-1">Descripción del grupo</label>
-                        <Input
-                          value={group.description}
-                          onChange={(e) => setProdCustomizationGroups(prev => prev.map(item => item.id === group.id ? { ...item, description: e.target.value } : item))}
-                          placeholder="Ej: Elige 2 sabores para la pizza"
-                          className="bg-slate-900 border-slate-850 text-white"
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-1 scrollbar-hide">
+                  {customizationGroups.map(group => {
+                    const isSelected = selectedGroupIds.includes(group.id);
+                    return (
+                      <label key={group.id}
+                        className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${isSelected ? 'bg-orange-500/10 border-orange-500/40' : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'}`}>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => {
+                            setSelectedGroupIds(prev =>
+                              isSelected ? prev.filter(id => id !== group.id) : [...prev, group.id]
+                            );
+                          }}
+                          className="mt-0.5 accent-orange-500"
                         />
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-[10px] font-semibold text-slate-300 block mb-1">Min.</label>
-                          <Input
-                            type="number"
-                            min={0}
-                            value={group.minSelections}
-                            onChange={(e) => setProdCustomizationGroups(prev => prev.map(item => item.id === group.id ? { ...item, minSelections: Number(e.target.value) || 0 } : item))}
-                            className="bg-slate-900 border-slate-850 text-white"
-                          />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-bold text-white">{group.name}</p>
+                          {group.description && <p className="text-[10px] text-slate-400 mt-0.5">{group.description}</p>}
+                          <p className="text-[10px] text-slate-500 mt-0.5">
+                            {(group.options || []).map(o => o.label).join(', ')}
+                          </p>
                         </div>
-                        <div>
-                          <label className="text-[10px] font-semibold text-slate-300 block mb-1">Max.</label>
-                          <Input
-                            type="number"
-                            min={1}
-                            value={group.maxSelections}
-                            onChange={(e) => setProdCustomizationGroups(prev => prev.map(item => item.id === group.id ? { ...item, maxSelections: Number(e.target.value) || 1 } : item))}
-                            className="bg-slate-900 border-slate-850 text-white"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-bold uppercase text-slate-400">Opciones</span>
-                          <Button
-                            type="button"
-                            onClick={() => addCustomizationOption(group.id)}
-                            className="bg-slate-950 border border-slate-800 text-[10px] font-bold text-white cursor-pointer"
-                          >
-                            + Agregar opción
-                          </Button>
-                        </div>
-
-                        {(group.options || []).map((option: any, optionIndex: number) => (
-                          <div key={option.id} className="flex items-center gap-2">
-                            <Input
-                              value={option.label}
-                              onChange={(e) => setProdCustomizationGroups(prev => prev.map((item: any) => {
-                                if (item.id !== group.id) return item;
-                                return {
-                                  ...item,
-                                  options: (item.options || []).map((opt: any) => opt.id === option.id ? { ...opt, label: e.target.value } : opt),
-                                };
-                              }))}
-                              placeholder={`Opción ${optionIndex + 1}`}
-                              className="bg-slate-900 border-slate-850 text-white flex-1"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => removeCustomizationOption(group.id, option.id)}
-                              className="text-[10px] text-red-400 hover:text-red-300 font-bold cursor-pointer"
-                            >
-                              Eliminar
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+                        {group.required && (
+                          <span className="text-[9px] bg-orange-500/10 text-orange-400 border border-orange-500/20 px-1.5 py-0.5 rounded-full font-bold flex-shrink-0">Oblig.</span>
+                        )}
+                      </label>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -2052,23 +1744,14 @@ export default function Dashboard() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-xs font-semibold text-slate-300 block mb-1">Precio ($ COP) *</label>
-                <Input 
-                  required
-                  type="number"
-                  value={prodPrice}
-                  onChange={(e) => setProdPrice(Number(e.target.value))}
-                  className="bg-slate-900 border-slate-850 text-white"
-                />
+                <Input required type="number" value={prodPrice} onChange={(e) => setProdPrice(Number(e.target.value))} className="bg-slate-900 border-slate-850 text-white" />
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-300 block mb-1">Categoría *</label>
-                <Input 
-                  required
-                  value={prodCategory}
-                  onChange={(e) => setProdCategory(e.target.value)}
-                  placeholder="Ej: Tacos"
-                  className="bg-slate-900 border-slate-850 text-white"
-                />
+                <Input required value={prodCategory} onChange={(e) => setProdCategory(e.target.value)} placeholder="Ej: Tacos" className="bg-slate-900 border-slate-850 text-white" list="category-options" />
+                <datalist id="category-options">
+                  {orderedCategories.map(cat => <option key={cat} value={cat} />)}
+                </datalist>
               </div>
             </div>
 
@@ -2077,26 +1760,12 @@ export default function Dashboard() {
                 <h6 className="text-xs font-bold">Disponible</h6>
                 <p className="text-[10px] text-slate-500">¿El producto está a la venta hoy?</p>
               </div>
-              <Switch 
-                checked={prodAvailable}
-                onCheckedChange={setProdAvailable}
-              />
+              <Switch checked={prodAvailable} onCheckedChange={setProdAvailable} />
             </div>
 
             <div className="flex gap-3 pt-2">
-              <Button 
-                type="button" 
-                variant="outline" 
-                onClick={() => setIsAddingProduct(false)}
-                className="flex-1 border-slate-800 text-slate-300 cursor-pointer"
-              >
-                Cancelar
-              </Button>
-              <Button 
-                type="submit" 
-                disabled={prodLoading}
-                className="flex-1 bg-orange-500 text-white font-bold cursor-pointer"
-              >
+              <Button type="button" variant="outline" onClick={() => setIsAddingProduct(false)} className="flex-1 border-slate-800 text-slate-300 cursor-pointer">Cancelar</Button>
+              <Button type="submit" disabled={prodLoading} className="flex-1 bg-orange-500 text-white font-bold cursor-pointer">
                 {prodLoading ? 'Guardando...' : 'Guardar'}
               </Button>
             </div>
@@ -2104,26 +1773,18 @@ export default function Dashboard() {
         </DialogContent>
       </Dialog>
 
-      {/* DIALOG GALERÍA DE IMÁGENES DE STOCK */}
+      {/* ─── DIALOG: GALERÍA DE STOCK ─── */}
       <Dialog open={showStockGallery} onOpenChange={setShowStockGallery}>
         <DialogContent className="max-w-2xl bg-slate-950 border border-slate-850 text-white p-6 max-h-[85vh] overflow-y-auto scrollbar-hide">
           <DialogHeader>
             <DialogTitle>Galería de Fotos de Stock</DialogTitle>
           </DialogHeader>
           <p className="text-xs text-slate-400 mb-4 text-left">Selecciona una imagen profesional para tu plato:</p>
-
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {STOCK_IMAGES.map(img => (
-              <button
-                key={img.id}
-                type="button"
-                onClick={() => {
-                  setSelectedStockUrl(img.url);
-                  setImageFile(null);
-                  setShowStockGallery(false);
-                }}
-                className="group relative rounded-2xl overflow-hidden border border-slate-850 hover:border-orange-500/50 bg-slate-900 text-left transition-all cursor-pointer"
-              >
+              <button key={img.id} type="button"
+                onClick={() => { setSelectedStockUrl(img.url); setImageFile(null); setShowStockGallery(false); }}
+                className="group relative rounded-2xl overflow-hidden border border-slate-850 hover:border-orange-500/50 bg-slate-900 text-left transition-all cursor-pointer">
                 <img src={img.url} alt={img.name} className="w-full h-28 object-cover group-hover:scale-105 transition-transform" />
                 <div className="p-3">
                   <p className="font-bold text-xs truncate">{img.name}</p>
@@ -2135,14 +1796,132 @@ export default function Dashboard() {
         </DialogContent>
       </Dialog>
 
-      {/* ================= MODAL ASISTENTE DE FOTOS ("ENCUESTA") ================= */}
-      <Dialog open={isPhotoWizardOpen} onOpenChange={(open) => {
-        setIsPhotoWizardOpen(open);
-        if (!open) {
-          setWizardSelectedCategory(null);
-          setWizardEditingProduct(null);
-        }
-      }}>
+      {/* ─── DIALOG: EDITOR DE GRUPO ─── */}
+      <Dialog open={isGroupEditorOpen} onOpenChange={setIsGroupEditorOpen}>
+        <DialogContent className="max-w-md bg-slate-950 border border-slate-850 text-white p-6 max-h-[90vh] overflow-y-auto scrollbar-hide">
+          <DialogHeader>
+            <DialogTitle>{editingGroup ? 'Editar Grupo' : 'Nuevo Grupo de Personalización'}</DialogTitle>
+          </DialogHeader>
+
+          {groupError && (
+            <div className="bg-red-500/10 border border-red-500/30 text-red-200 p-3 rounded-lg text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-400" /><span>{groupError}</span>
+            </div>
+          )}
+
+          <div className="space-y-4 text-left">
+            <div>
+              <label className="text-xs font-semibold text-slate-300 block mb-1">Nombre del grupo *</label>
+              <Input value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder="Ej: Elige tu salsa" className="bg-slate-900 border-slate-850 text-white" />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-300 block mb-1">Descripción (opcional)</label>
+              <Input value={groupDescription} onChange={(e) => setGroupDescription(e.target.value)} placeholder="Ej: Selecciona 1 salsa para tu pedido" className="bg-slate-900 border-slate-850 text-white" />
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div className="flex items-center justify-between p-3 bg-slate-900 border border-slate-850 rounded-xl col-span-1">
+                <div>
+                  <p className="text-[10px] font-bold text-white">Obligatorio</p>
+                </div>
+                <Switch checked={groupRequired} onCheckedChange={setGroupRequired} />
+              </div>
+              <div>
+                <label className="text-[10px] font-semibold text-slate-300 block mb-1">Mín.</label>
+                <Input type="number" min={0} value={groupMin} onChange={(e) => setGroupMin(Number(e.target.value) || 0)} className="bg-slate-900 border-slate-850 text-white" />
+              </div>
+              <div>
+                <label className="text-[10px] font-semibold text-slate-300 block mb-1">Máx.</label>
+                <Input type="number" min={1} value={groupMax} onChange={(e) => setGroupMax(Number(e.target.value) || 1)} className="bg-slate-900 border-slate-850 text-white" />
+              </div>
+            </div>
+
+            {/* Opciones */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase text-slate-400">Opciones</span>
+                <button type="button"
+                  onClick={() => setGroupOptions(prev => [...prev, { id: `new-${Date.now()}`, label: '', price: 0 }])}
+                  className="text-[10px] text-orange-400 hover:text-orange-300 font-bold cursor-pointer">
+                  + Agregar opción
+                </button>
+              </div>
+
+              {groupOptions.map((opt, idx) => (
+                <div key={opt.id} className="flex items-center gap-2">
+                  <Input
+                    value={opt.label}
+                    onChange={(e) => setGroupOptions(prev => prev.map((o, i) => i === idx ? { ...o, label: e.target.value } : o))}
+                    placeholder={`Opción ${idx + 1}`}
+                    className="bg-slate-900 border-slate-850 text-white flex-1"
+                  />
+                  <div className="relative w-28">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs">$</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={opt.price}
+                      onChange={(e) => setGroupOptions(prev => prev.map((o, i) => i === idx ? { ...o, price: Number(e.target.value) || 0 } : o))}
+                      placeholder="0"
+                      className="bg-slate-900 border-slate-850 text-white pl-6"
+                    />
+                  </div>
+                  <button type="button"
+                    onClick={() => setGroupOptions(prev => prev.filter((_, i) => i !== idx))}
+                    className="text-red-400 hover:text-red-300 text-xs font-bold cursor-pointer">✕</button>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <Button type="button" variant="outline" onClick={() => setIsGroupEditorOpen(false)} className="flex-1 border-slate-800 text-slate-300 cursor-pointer">Cancelar</Button>
+              <Button type="button" onClick={handleSaveGroup} disabled={groupSaving} className="flex-1 bg-orange-500 text-white font-bold cursor-pointer">
+                {groupSaving ? 'Guardando...' : 'Guardar Grupo'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── DIALOG: MOVER PLATO A OTRA CATEGORÍA ─── */}
+      <Dialog open={!!movingProduct} onOpenChange={() => setMovingProduct(null)}>
+        <DialogContent className="max-w-sm bg-slate-950 border border-slate-850 text-white p-6">
+          <DialogHeader>
+            <DialogTitle>Mover plato a otra categoría</DialogTitle>
+          </DialogHeader>
+          {movingProduct && (
+            <div className="space-y-4 text-left">
+              <p className="text-sm text-slate-400">
+                Mover <strong className="text-white">"{movingProduct.name}"</strong> a:
+              </p>
+              <div>
+                <label className="text-xs font-semibold text-slate-300 block mb-1">Categoría destino *</label>
+                <Input
+                  value={moveTargetCategory}
+                  onChange={(e) => setMoveTargetCategory(e.target.value)}
+                  list="move-category-options"
+                  placeholder="Selecciona o escribe una categoría"
+                  className="bg-slate-900 border-slate-850 text-white"
+                />
+                <datalist id="move-category-options">
+                  {orderedCategories.map(cat => <option key={cat} value={cat} />)}
+                </datalist>
+              </div>
+              <div className="flex gap-3">
+                <Button type="button" variant="outline" onClick={() => setMovingProduct(null)} className="flex-1 border-slate-800 text-slate-300 cursor-pointer">Cancelar</Button>
+                <Button type="button" onClick={handleMoveProductToCategory}
+                  disabled={!moveTargetCategory.trim() || moveTargetCategory.trim() === movingProduct.category}
+                  className="flex-1 bg-orange-500 text-white font-bold cursor-pointer">
+                  Mover
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── DIALOG: ASISTENTE DE FOTOS ─── */}
+      <Dialog open={isPhotoWizardOpen} onOpenChange={(open) => { setIsPhotoWizardOpen(open); if (!open) { setWizardSelectedCategory(null); setWizardEditingProduct(null); } }}>
         <DialogContent className="max-w-md bg-slate-950 border border-slate-850 text-white p-6 max-h-[90vh] overflow-y-auto scrollbar-hide">
           {isPhotoWizardOpen && !wizardSelectedCategory && (
             <div className="space-y-4 text-left">
@@ -2151,114 +1930,64 @@ export default function Dashboard() {
                   <Sparkles className="w-5 h-5" /> Organizar Fotos de tu Menú
                 </DialogTitle>
               </DialogHeader>
-              <p className="text-xs text-slate-400">
-                Elige una sección de tu menú para ver sus productos uno por uno y organizar sus fotografías de forma interactiva:
-              </p>
+              <p className="text-xs text-slate-400">Elige una sección para ver sus productos y organizar sus fotografías:</p>
               <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1 scrollbar-hide">
                 {orderedCategories.map(cat => {
-                  const catProducts = products.filter(p => p.category === cat);
-                  const missingCount = catProducts.filter(p => !p.image_url || p.image_url.trim() === '' || p.image_url === 'null').length;
+                  const catProds = products.filter(p => p.category === cat);
+                  const missingCount = catProds.filter(p => !p.image_url || p.image_url.trim() === '' || p.image_url === 'null').length;
                   return (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => {
-                        setWizardSelectedCategory(cat);
-                        setWizardEditingProduct(null);
-                      }}
-                      className="w-full bg-slate-900 border border-slate-850 p-4 rounded-xl flex justify-between items-center hover:border-orange-500/50 hover:bg-slate-850 transition-colors text-left cursor-pointer"
-                    >
+                    <button key={cat} type="button" onClick={() => { setWizardSelectedCategory(cat); setWizardEditingProduct(null); }}
+                      className="w-full bg-slate-900 border border-slate-850 p-4 rounded-xl flex justify-between items-center hover:border-orange-500/50 hover:bg-slate-850 transition-colors text-left cursor-pointer">
                       <div className="truncate pr-2">
                         <span className="font-bold text-sm text-white">{cat}</span>
-                        <p className="text-xs text-slate-500 mt-0.5">{catProducts.length} productos</p>
+                        <p className="text-xs text-slate-500 mt-0.5">{catProds.length} productos</p>
                       </div>
-                      <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold whitespace-nowrap flex-shrink-0 ${
-                        missingCount > 0 ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                      }`}>
+                      <span className={`text-[10px] px-2.5 py-1 rounded-full font-bold whitespace-nowrap flex-shrink-0 ${missingCount > 0 ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}`}>
                         {missingCount > 0 ? `${missingCount} sin foto` : 'Completo ✓'}
                       </span>
                     </button>
                   );
                 })}
               </div>
-              <div className="pt-2">
-                <Button 
-                  type="button"
-                  onClick={() => setIsPhotoWizardOpen(false)}
-                  className="w-full bg-slate-950 border border-slate-850 text-white cursor-pointer"
-                >
-                  Cerrar Asistente
-                </Button>
-              </div>
+              <Button type="button" onClick={() => setIsPhotoWizardOpen(false)} className="w-full bg-slate-950 border border-slate-850 text-white cursor-pointer">Cerrar Asistente</Button>
             </div>
           )}
 
           {isPhotoWizardOpen && wizardSelectedCategory && !wizardEditingProduct && (() => {
-            const catProducts = products.filter(p => p.category === wizardSelectedCategory);
+            const catProds = products.filter(p => p.category === wizardSelectedCategory);
             return (
               <div className="space-y-4 text-left">
                 <DialogHeader className="flex flex-row items-center justify-between border-b border-slate-900 pb-3">
                   <DialogTitle className="text-base font-bold text-white flex items-center gap-2">
                     <Sparkles className="w-5 h-5 text-orange-400" /> Sección: {wizardSelectedCategory}
                   </DialogTitle>
-                  <button 
-                    type="button"
-                    onClick={() => setWizardSelectedCategory(null)}
-                    className="text-xs text-slate-400 hover:text-white flex items-center gap-1 cursor-pointer font-semibold"
-                  >
+                  <button type="button" onClick={() => setWizardSelectedCategory(null)} className="text-xs text-slate-400 hover:text-white flex items-center gap-1 cursor-pointer font-semibold">
                     <ArrowLeft className="w-3.5 h-3.5" /> Secciones
                   </button>
                 </DialogHeader>
-                <p className="text-xs text-slate-400">
-                  Selecciona a qué plato deseas configurarle o cambiarle la foto de esta sección:
-                </p>
-
                 <div className="space-y-2 max-h-[55vh] overflow-y-auto pr-1 scrollbar-hide">
-                  {catProducts.map(p => {
+                  {catProds.map(p => {
                     const hasPhoto = p.image_url && p.image_url.trim() !== '' && p.image_url !== 'null';
                     return (
-                      <div 
-                        key={p.id} 
-                        className="bg-slate-900/60 border border-slate-850 p-3.5 rounded-xl flex items-center justify-between gap-3"
-                      >
+                      <div key={p.id} className="bg-slate-900/60 border border-slate-850 p-3.5 rounded-xl flex items-center justify-between gap-3">
                         <div className="flex items-center gap-3 truncate flex-1">
                           {hasPhoto ? (
                             <img src={p.image_url} alt={p.name} className="w-12 h-12 rounded-lg object-cover flex-shrink-0 border border-slate-800" />
                           ) : (
-                            <div className="w-12 h-12 rounded-lg bg-slate-950 border border-slate-850 flex items-center justify-center flex-shrink-0 text-[10px] text-slate-500 font-bold">
-                              Sin Foto
-                            </div>
+                            <div className="w-12 h-12 rounded-lg bg-slate-950 border border-slate-850 flex items-center justify-center flex-shrink-0 text-[10px] text-slate-500 font-bold">Sin Foto</div>
                           )}
-                          <div className="truncate text-left">
+                          <div className="truncate">
                             <h5 className="font-bold text-xs text-white truncate">{p.name}</h5>
-                            <p className="text-[10px] text-slate-500 truncate max-w-[150px]">{p.description || 'Sin descripción'}</p>
                             <span className="text-[10px] font-extrabold text-orange-400">{formatPrice(p.price)}</span>
                           </div>
                         </div>
-
                         <div className="flex items-center gap-1.5 flex-shrink-0">
-                          <Button
-                            type="button"
-                            onClick={() => {
-                              setWizardEditingProduct(p);
-                              setWizardImageFile(null);
-                              setWizardSelectedStockUrl(p.image_url || '');
-                            }}
-                            className={`px-3 py-1.5 h-8 text-[11px] font-bold cursor-pointer ${
-                              hasPhoto 
-                                ? 'bg-slate-950 hover:bg-slate-855 text-slate-300 border border-slate-800' 
-                                : 'bg-orange-500 hover:bg-orange-600 text-white'
-                            }`}
-                          >
+                          <Button type="button" onClick={() => { setWizardEditingProduct(p); setWizardImageFile(null); setWizardSelectedStockUrl(p.image_url || ''); }}
+                            className={`px-3 py-1.5 h-8 text-[11px] font-bold cursor-pointer ${hasPhoto ? 'bg-slate-950 hover:bg-slate-855 text-slate-300 border border-slate-800' : 'bg-orange-500 hover:bg-orange-600 text-white'}`}>
                             {hasPhoto ? 'Editar' : 'Agregar Foto'}
                           </Button>
                           {hasPhoto && (
-                            <button
-                              type="button"
-                              onClick={() => handleWizardRemovePhoto(p)}
-                              className="p-2 rounded bg-slate-950 hover:bg-slate-850 text-red-400 hover:text-red-300 border border-slate-800 cursor-pointer"
-                              title="Quitar foto"
-                            >
+                            <button type="button" onClick={() => handleWizardRemovePhoto(p)} className="p-2 rounded bg-slate-950 hover:bg-slate-850 text-red-400 hover:text-red-300 border border-slate-800 cursor-pointer" title="Quitar foto">
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           )}
@@ -2266,26 +1995,10 @@ export default function Dashboard() {
                       </div>
                     );
                   })}
-                  {catProducts.length === 0 && (
-                    <p className="text-xs text-slate-500 text-center py-4">No hay platos registrados en esta categoría.</p>
-                  )}
                 </div>
-
                 <div className="pt-2 flex gap-2">
-                  <Button 
-                    type="button"
-                    onClick={() => setWizardSelectedCategory(null)}
-                    className="flex-1 bg-slate-950 border border-slate-850 text-slate-350 text-xs font-semibold cursor-pointer"
-                  >
-                    Volver a Secciones
-                  </Button>
-                  <Button 
-                    type="button"
-                    onClick={() => setIsPhotoWizardOpen(false)}
-                    className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold cursor-pointer"
-                  >
-                    Finalizar
-                  </Button>
+                  <Button type="button" onClick={() => setWizardSelectedCategory(null)} className="flex-1 bg-slate-950 border border-slate-850 text-slate-350 text-xs font-semibold cursor-pointer">Volver</Button>
+                  <Button type="button" onClick={() => setIsPhotoWizardOpen(false)} className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold cursor-pointer">Finalizar</Button>
                 </div>
               </div>
             );
@@ -2294,118 +2007,49 @@ export default function Dashboard() {
           {isPhotoWizardOpen && wizardSelectedCategory && wizardEditingProduct && (() => {
             const currentProd = wizardEditingProduct;
             const suggestedImages = getRecommendedImages(currentProd.name, currentProd.category);
-
             return (
               <div className="space-y-4 text-left">
                 <DialogHeader className="flex flex-row items-center justify-between border-b border-slate-900 pb-3">
-                  <DialogTitle className="text-base font-bold text-white flex items-center gap-1.5 font-sans">
-                    <Sparkles className="w-5 h-5 text-orange-400 animate-pulse" /> Configurar Foto: {currentProd.name}
+                  <DialogTitle className="text-base font-bold text-white flex items-center gap-1.5">
+                    <Sparkles className="w-5 h-5 text-orange-400 animate-pulse" /> {currentProd.name}
                   </DialogTitle>
-                  <button 
-                    type="button"
-                    onClick={() => {
-                      setWizardEditingProduct(null);
-                      setWizardImageFile(null);
-                      setWizardSelectedStockUrl('');
-                    }}
-                    className="text-xs text-slate-400 hover:text-white flex items-center gap-1 cursor-pointer font-semibold"
-                  >
+                  <button type="button" onClick={() => { setWizardEditingProduct(null); setWizardImageFile(null); setWizardSelectedStockUrl(''); }} className="text-xs text-slate-400 hover:text-white flex items-center gap-1 cursor-pointer font-semibold">
                     <ArrowLeft className="w-3.5 h-3.5" /> Plato Listado
                   </button>
                 </DialogHeader>
-
-                <div className="bg-slate-900 border border-slate-850 p-4 rounded-xl space-y-1">
-                  <span className="text-[9px] bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2 py-0.5 rounded-full font-bold uppercase">
-                    {currentProd.category}
-                  </span>
-                  <h4 className="text-sm font-bold text-white mt-1">{currentProd.name}</h4>
-                  <p className="text-[11px] text-slate-400 truncate">{currentProd.description || 'Sin descripción.'}</p>
-                </div>
-
-                {/* Subida de Imagen */}
                 <div className="space-y-4">
                   <div className="space-y-1.5">
                     <label className="text-xs font-semibold text-slate-350 block">1. Sube una foto real desde tu dispositivo:</label>
                     <div className="border border-dashed border-slate-800 rounded-xl p-4 text-center bg-slate-900 hover:border-orange-500/50 transition-all relative">
-                      <input 
-                        type="file" 
-                        accept="image/*"
-                        onChange={(e) => {
-                          setWizardImageFile(e.target.files?.[0] || null);
-                          setWizardSelectedStockUrl('');
-                        }}
-                        className="absolute inset-0 opacity-0 cursor-pointer"
-                      />
+                      <input type="file" accept="image/*" onChange={(e) => { setWizardImageFile(e.target.files?.[0] || null); setWizardSelectedStockUrl(''); }} className="absolute inset-0 opacity-0 cursor-pointer" />
                       <div className="flex flex-col items-center justify-center space-y-1">
                         <Upload className="w-7 h-7 text-slate-500" />
-                        <p className="text-xs text-slate-300 font-semibold font-sans">
-                          {wizardImageFile ? wizardImageFile.name : 'Subir archivo de imagen'}
-                        </p>
+                        <p className="text-xs text-slate-300 font-semibold">{wizardImageFile ? wizardImageFile.name : 'Subir archivo de imagen'}</p>
                       </div>
                     </div>
                   </div>
-
                   <div className="space-y-1.5">
                     <label className="text-xs font-semibold text-slate-350 block">2. O selecciona una imagen de stock sugerida:</label>
                     <div className="grid grid-cols-2 gap-2">
                       {suggestedImages.map(img => (
-                        <button
-                          key={img.id}
-                          type="button"
-                          onClick={() => {
-                            setWizardSelectedStockUrl(img.url);
-                            setWizardImageFile(null);
-                          }}
-                          className={`group relative rounded-xl overflow-hidden border bg-slate-900 text-left transition-all cursor-pointer ${
-                            wizardSelectedStockUrl === img.url ? 'border-orange-500 ring-2 ring-orange-500/30' : 'border-slate-850 hover:border-slate-750'
-                          }`}
-                        >
+                        <button key={img.id} type="button" onClick={() => { setWizardSelectedStockUrl(img.url); setWizardImageFile(null); }}
+                          className={`group relative rounded-xl overflow-hidden border bg-slate-900 text-left transition-all cursor-pointer ${wizardSelectedStockUrl === img.url ? 'border-orange-500 ring-2 ring-orange-500/30' : 'border-slate-850 hover:border-slate-750'}`}>
                           <img src={img.url} alt={img.name} className="w-full h-14 object-cover" />
-                          <div className="p-1.5">
-                            <p className="font-bold text-[9px] truncate text-white">{img.name}</p>
-                          </div>
+                          <div className="p-1.5"><p className="font-bold text-[9px] truncate text-white">{img.name}</p></div>
                         </button>
                       ))}
                     </div>
                   </div>
-
-                  {/* Previsualización elegida */}
                   {(wizardImageFile || (wizardSelectedStockUrl && wizardSelectedStockUrl !== currentProd.image_url)) && (
                     <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl flex items-center justify-between text-xs">
                       <span>✓ Nueva foto seleccionada</span>
-                      <button 
-                        type="button"
-                        onClick={() => {
-                          setWizardImageFile(null);
-                          setWizardSelectedStockUrl(currentProd.image_url || '');
-                        }}
-                        className="font-bold hover:underline cursor-pointer"
-                      >
-                        Deshacer
-                      </button>
+                      <button type="button" onClick={() => { setWizardImageFile(null); setWizardSelectedStockUrl(currentProd.image_url || ''); }} className="font-bold hover:underline cursor-pointer">Deshacer</button>
                     </div>
                   )}
                 </div>
-
                 <div className="flex gap-2 pt-3 border-t border-slate-900">
-                  <Button 
-                    type="button"
-                    variant="outline" 
-                    onClick={() => {
-                      setWizardEditingProduct(null);
-                      setWizardImageFile(null);
-                      setWizardSelectedStockUrl('');
-                    }} 
-                    className="flex-1 border-slate-800 text-slate-400 cursor-pointer"
-                  >
-                    Cancelar
-                  </Button>
-                  <Button 
-                    type="button"
-                    onClick={handleWizardSave}
-                    disabled={wizardLoading || (!wizardImageFile && (!wizardSelectedStockUrl || wizardSelectedStockUrl === currentProd.image_url))}
-                    className="flex-1 bg-orange-500 text-white font-bold cursor-pointer"
-                  >
+                  <Button type="button" variant="outline" onClick={() => { setWizardEditingProduct(null); setWizardImageFile(null); setWizardSelectedStockUrl(''); }} className="flex-1 border-slate-800 text-slate-400 cursor-pointer">Cancelar</Button>
+                  <Button type="button" onClick={handleWizardSave} disabled={wizardLoading || (!wizardImageFile && (!wizardSelectedStockUrl || wizardSelectedStockUrl === currentProd.image_url))} className="flex-1 bg-orange-500 text-white font-bold cursor-pointer">
                     {wizardLoading ? 'Guardando...' : 'Guardar Foto'}
                   </Button>
                 </div>
@@ -2415,63 +2059,34 @@ export default function Dashboard() {
         </DialogContent>
       </Dialog>
 
-      {/* ================= MODAL ORDENAR CATEGORÍAS ================= */}
+      {/* ─── DIALOG: ORDENAR CATEGORÍAS ─── */}
       <Dialog open={isOrderCategoriesOpen} onOpenChange={setIsOrderCategoriesOpen}>
         <DialogContent className="max-w-md bg-slate-950 border border-slate-850 text-white p-6 max-h-[85vh] overflow-y-auto scrollbar-hide">
           <DialogHeader>
             <DialogTitle>Ordenar Secciones del Menú</DialogTitle>
           </DialogHeader>
-          <p className="text-xs text-slate-400 mb-4 text-left">
-            Usa los botones para ordenar las secciones del menú digital de tus clientes. Aparecerán listadas en este orden:
-          </p>
-
+          <p className="text-xs text-slate-400 mb-4 text-left">Usa los botones para ordenar las secciones del menú:</p>
           <div className="space-y-2 text-left mb-6">
             {categoryOrderList.map((cat, index) => (
-              <div 
-                key={cat} 
-                className="bg-slate-900 border border-slate-850 p-4 rounded-xl flex justify-between items-center"
-              >
+              <div key={cat} className="bg-slate-900 border border-slate-850 p-4 rounded-xl flex justify-between items-center">
                 <div className="flex items-center gap-3">
-                  <span className="w-6 h-6 rounded-full bg-slate-950 border border-slate-800 text-slate-400 flex items-center justify-center font-bold text-xs">
-                    {index + 1}
-                  </span>
+                  <span className="w-6 h-6 rounded-full bg-slate-950 border border-slate-800 text-slate-400 flex items-center justify-center font-bold text-xs">{index + 1}</span>
                   <span className="font-bold text-sm text-white">{cat}</span>
                 </div>
                 <div className="flex gap-1">
-                  <button 
-                    disabled={index === 0}
-                    onClick={() => handleMoveCategory(index, 'up')}
-                    className="p-1.5 rounded bg-slate-950 hover:bg-slate-850 disabled:opacity-30 disabled:hover:bg-slate-950 text-slate-350 cursor-pointer"
-                  >
+                  <button disabled={index === 0} onClick={() => handleMoveCategory(index, 'up')} className="p-1.5 rounded bg-slate-950 hover:bg-slate-850 disabled:opacity-30 text-slate-350 cursor-pointer">
                     <ArrowUp className="w-4 h-4" />
                   </button>
-                  <button 
-                    disabled={index === categoryOrderList.length - 1}
-                    onClick={() => handleMoveCategory(index, 'down')}
-                    className="p-1.5 rounded bg-slate-950 hover:bg-slate-850 disabled:opacity-30 disabled:hover:bg-slate-950 text-slate-350 cursor-pointer"
-                  >
+                  <button disabled={index === categoryOrderList.length - 1} onClick={() => handleMoveCategory(index, 'down')} className="p-1.5 rounded bg-slate-950 hover:bg-slate-850 disabled:opacity-30 text-slate-350 cursor-pointer">
                     <ArrowDown className="w-4 h-4" />
                   </button>
                 </div>
               </div>
             ))}
           </div>
-
           <div className="flex gap-3">
-            <Button 
-              type="button" 
-              variant="outline" 
-              onClick={() => setIsOrderCategoriesOpen(false)}
-              className="flex-1 border-slate-800 text-slate-300 cursor-pointer"
-            >
-              Cancelar
-            </Button>
-            <Button 
-              onClick={handleSaveCategoryOrder}
-              className="flex-1 bg-orange-500 text-white font-bold cursor-pointer"
-            >
-              Guardar Orden
-            </Button>
+            <Button type="button" variant="outline" onClick={() => setIsOrderCategoriesOpen(false)} className="flex-1 border-slate-800 text-slate-300 cursor-pointer">Cancelar</Button>
+            <Button onClick={handleSaveCategoryOrder} className="flex-1 bg-orange-500 text-white font-bold cursor-pointer">Guardar Orden</Button>
           </div>
         </DialogContent>
       </Dialog>
