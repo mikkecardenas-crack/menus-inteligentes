@@ -49,7 +49,18 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
 
   const profile = menuProfile || initialProfile;
 
-  const rawCategories = Array.from(new Set(initialProducts.map(p => p.category)));
+  const orderedProducts = [...initialProducts].sort((a, b) => {
+    const aOrder = Number(a.display_order ?? 0);
+    const bOrder = Number(b.display_order ?? 0);
+
+    if (aOrder && bOrder) {
+      return aOrder - bOrder;
+    }
+
+    return 0;
+  });
+
+  const rawCategories = Array.from(new Set(orderedProducts.map(p => p.category)));
   const savedOrder = profile.category_order || [];
   const categories = [
     ...savedOrder.filter((c: string) => rawCategories.includes(c)),
@@ -57,28 +68,7 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
   ];
 
   useEffect(() => {
-    const syncProfileFromStorage = () => {
-      if (typeof window === 'undefined' || !initialProfile?.slug) return;
-      try {
-        const stored = window.localStorage.getItem(`menu_cover_settings_${initialProfile.slug}`);
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          // Remove legacy keys that should no longer override profile
-          if (parsed && typeof parsed === 'object') {
-            delete parsed.menu_cover_button_label;
-          }
-          setMenuProfile({ ...initialProfile, ...parsed });
-          return;
-        }
-      } catch {
-        // ignore
-      }
-      setMenuProfile(initialProfile);
-    };
-
-    syncProfileFromStorage();
-    window.addEventListener('storage', syncProfileFromStorage);
-    return () => window.removeEventListener('storage', syncProfileFromStorage);
+    setMenuProfile(initialProfile);
   }, [initialProfile]);
 
   // Cargar carrito de sessionStorage al montar (evita errores de hidratación de SSR)

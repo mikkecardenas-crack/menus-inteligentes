@@ -25,25 +25,6 @@ const THEMES = [
   { name: 'Negro Elegante', color: '#1A202C', label: '🍷 Ideal para Gourmet, Bistro, Vinos' }
 ];
 
-const getStoredMenuCoverSettings = (slug: string) => {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(`menu_cover_settings_${slug}`);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-};
-
-const saveStoredMenuCoverSettings = (slug: string, payload: Record<string, string>) => {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(`menu_cover_settings_${slug}`, JSON.stringify(payload));
-  } catch {
-    // noop
-  }
-};
-
 // Comprimir imágenes en el cliente para evitar pasar el límite de 4.5MB de Vercel
 const compressImage = (file: File, maxWidth = 1600, quality = 0.8): Promise<File> => {
   return new Promise((resolve) => {
@@ -110,7 +91,7 @@ export default function Dashboard() {
   const [whatsapp, setWhatsapp] = useState('');
   const [primaryColor, setPrimaryColor] = useState('#E53E3E');
   const [logoFile, setLogoFile] = useState<File | null>(null); // Archivo de logo en Onboarding
-  const [menuFile, setMenuFile] = useState<File | null>(null);
+  const [menuFiles, setMenuFiles] = useState<File[]>([]);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
   
   // IA Loader
@@ -123,6 +104,7 @@ export default function Dashboard() {
   const [isAddingProduct, setIsAddingProduct] = useState(false);
   const [editingProduct, setEditingProduct] = useState<any | null>(null);
   const [copied, setCopied] = useState(false);
+  const [draggedProductId, setDraggedProductId] = useState<string | null>(null);
   
   // Form de agregar/editar producto
   const [prodName, setProdName] = useState('');
@@ -176,17 +158,7 @@ export default function Dashboard() {
         .maybeSingle();
 
       if (prof) {
-        const storedCover = getStoredMenuCoverSettings(prof.slug || '');
-        const profileWithCover = storedCover
-          ? {
-              ...prof,
-              menu_cover_image_url: prof.menu_cover_image_url || storedCover.menu_cover_image_url || '',
-              menu_cover_title: prof.menu_cover_title || storedCover.menu_cover_title || '',
-              menu_cover_description: prof.menu_cover_description || storedCover.menu_cover_description || '',
-            }
-          : prof;
-
-        setProfile(profileWithCover);
+        setProfile(prof);
         const { data: prods } = await supabase
           .from('products')
           .select('*')
@@ -255,9 +227,10 @@ export default function Dashboard() {
   };
 
   // Subir el menú temporal de Onboarding a Supabase Storage
-  const handleUploadTempMenu = async (file: File | Blob) => {
-    const fileExt = menuFile?.name.split('.').pop() || 'jpg';
-    const fileName = `temp-menu-${Date.now()}.${fileExt}`;
+  const handleUploadTempMenu = async (file: File | Blob, fallbackName?: string) => {
+    const resolvedName = file instanceof File ? file.name : (fallbackName || 'menu-upload');
+    const fileExt = resolvedName.split('.').pop() || 'jpg';
+    const fileName = `temp-menu-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${fileExt}`;
     const filePath = `products/${user.id}/${fileName}`;
     
     const { error: uploadError } = await supabase.storage
@@ -273,65 +246,112 @@ export default function Dashboard() {
     return publicUrl;
   };
 
-  // Onboarding: Ejecutar OCR / IA
+  // Procesar UNA imagen/PDF con Gemini y devolver los productos extraídos
+  const parseMenuFile = async (file: File) => {
+    let fileToSend: File | Blob = file;
+    if (file.type.startsWith('image/')) {
+      setIaProgress('Optimizando imagen para la IA...');
+      try {
+        fileToSend = await compressImage(file);
+      } catch (e) {
+        console.error('Error al comprimir imagen:', e);
+      }
+    }
+
+    setIaProgress('Subiendo archivo temporal a almacenamiento seguro...');
+    const fileUrl = await handleUploadTempMenu(fileToSend, file.name);
+
+    const res = await fetch('/api/parse-menu', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ fileUrl, mimeType: file.type })
+    });
+
+    if (!res.ok) {
+      let errMsg = 'No se pudo analizar el archivo';
+      try {
+        const errorData = await res.json();
+        errMsg = errorData.error || errMsg;
+      } catch (e) {
+        if (res.status === 413) {
+          errMsg = 'El archivo es demasiado grande para ser procesado por el servidor. Intenta recortar o reducir el peso de la imagen.';
+        } else {
+          errMsg = `Error del servidor (${res.status}): No se pudo procesar la carta.`;
+        }
+      }
+      throw new Error(errMsg);
+    }
+
+    const data = await res.json();
+
+    if (!data.products || !Array.isArray(data.products) || data.products.length === 0) {
+      throw new Error('La IA no pudo estructurar correctamente los platos del menú. Intenta con otra imagen o PDF más clara.');
+    }
+
+    return data.products;
+  };
+
+  // Onboarding: Ejecutar OCR / IA sobre varias imágenes o PDFs y combinarlos en un solo menú
   const handleAnalyzeMenu = async () => {
-    if (!menuFile) return;
+    if (!menuFiles.length) return;
     setIsExtracting(true);
     setOnboardingError(null);
-    setIaProgress('Subiendo archivo y conectando con la IA de Gemini...');
+    setIaProgress('Conectando con la IA de Gemini para analizar varias fuentes...');
 
     try {
-      let fileToSend: File | Blob = menuFile;
-      if (menuFile.type.startsWith('image/')) {
-        setIaProgress('Optimizando imagen para la IA...');
-        try {
-          fileToSend = await compressImage(menuFile);
-        } catch (e) {
-          console.error('Error al comprimir imagen:', e);
-        }
+      const extractedProducts: any[] = [];
+
+      for (let index = 0; index < menuFiles.length; index += 1) {
+        const file = menuFiles[index];
+        setIaProgress(`Analizando archivo ${index + 1} de ${menuFiles.length}...`);
+        const products = await parseMenuFile(file);
+        extractedProducts.push(...products);
       }
 
-      setIaProgress('Subiendo archivo temporal a almacenamiento seguro...');
-      const fileUrl = await handleUploadTempMenu(fileToSend);
-
-      setTimeout(() => setIaProgress('Gemini está analizando la estructura de tu menú...'), 2000);
-      setTimeout(() => setIaProgress('Identificando platos, precios y organizando categorías...'), 4500);
-
-      const res = await fetch('/api/parse-menu', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ fileUrl, mimeType: menuFile.type })
-      });
-
-      if (!res.ok) {
-        let errMsg = 'No se pudo analizar el archivo';
-        try {
-          const errorData = await res.json();
-          errMsg = errorData.error || errMsg;
-        } catch (e) {
-          if (res.status === 413) {
-            errMsg = 'El archivo es demasiado grande para ser procesado por el servidor. Intenta recortar o reducir el peso de la imagen.';
-          } else {
-            errMsg = `Error del servidor (${res.status}): No se pudo procesar la carta.`;
-          }
-        }
-        throw new Error(errMsg);
+      if (extractedProducts.length === 0) {
+        throw new Error('No se encontró ningún plato válido en las imágenes o PDFs seleccionados.');
       }
 
-      const data = await res.json();
-
-      if (data.products && Array.isArray(data.products)) {
-        setParsedProducts(data.products);
-        setOnboardingStep(3); 
-      } else {
-        throw new Error('La IA no pudo estructurar correctamente los platos del menú. Intenta con una imagen más clara.');
-      }
+      setParsedProducts(prev => [...prev, ...extractedProducts]);
+      setOnboardingStep(3);
     } catch (err: any) {
       setOnboardingError(err.message || 'Error al procesar el menú');
     } finally {
       setIsExtracting(false);
+      setMenuFiles([]);
+    }
+  };
+
+  // Permitir agregar más platos usando imágenes/PDFs luego de la extracción inicial
+  const handleAddProductsFromImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    if (!selectedFiles.length) return;
+
+    setIsExtracting(true);
+    setOnboardingError(null);
+    setIaProgress('Agregando platos desde nuevas imágenes o PDFs...');
+
+    try {
+      const extraProducts: any[] = [];
+      for (let index = 0; index < selectedFiles.length; index += 1) {
+        const file = selectedFiles[index];
+        setIaProgress(`Procesando archivo adicional ${index + 1} de ${selectedFiles.length}...`);
+        const products = await parseMenuFile(file);
+        extraProducts.push(...products);
+      }
+
+      if (extraProducts.length === 0) {
+        throw new Error('No se detectaron platos válidos en los archivos adicionales.');
+      }
+
+      setParsedProducts(prev => [...prev, ...extraProducts]);
+    } catch (err: any) {
+      setOnboardingError(err.message || 'Error al agregar platos desde imágenes');
+    } finally {
+      setIsExtracting(false);
+      e.target.value = '';
     }
   };
 
@@ -443,22 +463,24 @@ export default function Dashboard() {
 
       if (error) {
         if (error.code === '42703' || error.message?.includes('column')) {
-          saveStoredMenuCoverSettings(profile.slug || '', {
-            menu_cover_image_url: payload.menu_cover_image_url,
-            menu_cover_title: payload.menu_cover_title,
-            menu_cover_description: payload.menu_cover_description,
-          });
-          alert('Configuración guardada localmente para tu navegador. Si quieres que se sincronice en todos los dispositivos, agrega las columnas de portada en la base de datos.');
+          alert('No se pudo guardar la portada en la base de datos. Asegúrate de que la tabla profiles tenga las columnas menu_cover_image_url, menu_cover_title y menu_cover_description.');
           return;
         }
         throw error;
       }
 
-      saveStoredMenuCoverSettings(profile.slug || '', {
-        menu_cover_image_url: payload.menu_cover_image_url,
-        menu_cover_title: payload.menu_cover_title,
-        menu_cover_description: payload.menu_cover_description,
-      });
+      const { data: updatedProfile, error: fetchError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      if (fetchError) {
+        alert('Configuración guardada, pero no se pudo recargar el perfil automático. Refresca la página para ver los cambios.');
+        return;
+      }
+
+      setProfile(updatedProfile);
       alert('Configuración guardada correctamente.');
     } catch (err: any) {
       alert('Error al guardar ajustes: ' + err.message);
@@ -805,6 +827,70 @@ export default function Dashboard() {
     }
   };
 
+  const getProductsForCategory = (category: string) => {
+    return [...products.filter(p => p.category === category)].sort((a, b) => {
+      const aOrder = Number(a.display_order ?? 0);
+      const bOrder = Number(b.display_order ?? 0);
+
+      if (aOrder > 0 || bOrder > 0) {
+        if (aOrder === bOrder) return 0;
+        return aOrder - bOrder;
+      }
+
+      return 0;
+    });
+  };
+
+  const reorderProductsInCategory = async (category: string, draggedId: string, targetId: string) => {
+    if (!draggedId || !targetId || draggedId === targetId) return;
+
+    const categoryProducts = getProductsForCategory(category);
+    const fromIndex = categoryProducts.findIndex(p => p.id === draggedId);
+    const toIndex = categoryProducts.findIndex(p => p.id === targetId);
+
+    if (fromIndex === -1 || toIndex === -1) return;
+
+    const reordered = [...categoryProducts];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved);
+
+    const updatedProducts = products.map((product) => {
+      if (product.category !== category) return product;
+      const newIndex = reordered.findIndex(item => item.id === product.id);
+      return { ...product, display_order: newIndex >= 0 ? newIndex + 1 : Number(product.display_order ?? 0) };
+    });
+
+    setProducts(updatedProducts);
+
+    try {
+      await Promise.all(
+        reordered.map((product, index) =>
+          supabase
+            .from('products')
+            .update({ display_order: index + 1 })
+            .eq('id', product.id)
+        )
+      );
+    } catch (error: any) {
+      alert('No se pudo guardar el nuevo orden de los platos. Asegúrate de que la columna display_order exista en la tabla products.');
+    }
+  };
+
+  const moveProductPosition = async (productId: string, direction: 'up' | 'down') => {
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
+
+    const categoryProducts = getProductsForCategory(product.category);
+    const currentIndex = categoryProducts.findIndex(p => p.id === productId);
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+
+    if (currentIndex === -1 || targetIndex < 0 || targetIndex >= categoryProducts.length) {
+      return;
+    }
+
+    await reorderProductsInCategory(product.category, productId, categoryProducts[targetIndex].id);
+  };
+
   // URL del menú digital público
   const publicUrl = profile ? `${window.location.origin}/menu/${profile.slug}` : '';
 
@@ -1015,29 +1101,35 @@ export default function Dashboard() {
                   <div className="space-y-6">
                     <div className="border-2 border-dashed border-slate-800 rounded-3xl p-8 text-center bg-slate-950/50 hover:border-orange-500/50 transition-colors relative group">
                       <input 
-                        type="file" 
+                        type="file"
+                        multiple
                         accept="image/*,application/pdf"
-                        onChange={(e) => setMenuFile(e.target.files?.[0] || null)}
+                        onChange={(e) => setMenuFiles(Array.from(e.target.files || []))}
                         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                       />
                       <div className="flex flex-col items-center justify-center space-y-3">
                         <Upload className="w-12 h-12 text-slate-500 group-hover:text-orange-500 transition-colors" />
-                        <p className="font-semibold text-white">Haz clic o arrastra una imagen o PDF</p>
-                        <p className="text-xs text-slate-500">Soporta JPG, PNG y PDF. Asegúrate de que los precios se lean claramente.</p>
+                        <p className="font-semibold text-white">Haz clic o arrastra una o varias imágenes/PDF</p>
+                        <p className="text-xs text-slate-500">Soporta JPG, PNG y PDF. Puedes subir varias páginas o varios menús para unirlos en uno solo.</p>
                       </div>
                     </div>
 
-                    {menuFile && (
-                      <div className="bg-slate-950/80 border border-slate-850 p-4 rounded-xl flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <Package className="w-8 h-8 text-orange-500" />
-                          <div className="text-left">
-                            <p className="font-semibold text-sm max-w-[200px] truncate">{menuFile.name}</p>
-                            <p className="text-xs text-slate-500">{(menuFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                    {menuFiles.length > 0 && (
+                      <div className="space-y-3">
+                        {menuFiles.map((file, index) => (
+                          <div key={`${file.name}-${index}`} className="bg-slate-950/80 border border-slate-850 p-4 rounded-xl flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <Package className="w-8 h-8 text-orange-500" />
+                              <div className="text-left">
+                                <p className="font-semibold text-sm max-w-[200px] truncate">{file.name}</p>
+                                <p className="text-xs text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                        <button onClick={() => setMenuFile(null)} className="text-xs text-red-400 hover:text-red-300 font-semibold cursor-pointer">
-                          Quitar
+                        ))}
+
+                        <button onClick={() => setMenuFiles([])} className="text-xs text-red-400 hover:text-red-300 font-semibold cursor-pointer">
+                          Quitar todas
                         </button>
                       </div>
                     )}
@@ -1048,7 +1140,7 @@ export default function Dashboard() {
                       </Button>
                       <Button 
                         onClick={handleAnalyzeMenu}
-                        disabled={!menuFile}
+                        disabled={!menuFiles.length || isExtracting}
                         className="flex-1 bg-gradient-to-r from-red-600 to-orange-500 font-bold text-white cursor-pointer"
                       >
                         Analizar con IA <ChevronRight className="w-5 h-5 ml-1" />
@@ -1116,13 +1208,26 @@ export default function Dashboard() {
                   ))}
                 </div>
 
-                <div className="flex justify-between items-center py-2">
-                  <button 
-                    onClick={() => setParsedProducts([...parsedProducts, { name: '', price: 0, category: 'Varios', description: '' }])}
-                    className="text-xs text-orange-500 hover:text-orange-400 font-bold flex items-center gap-1 cursor-pointer"
-                  >
-                    <Plus className="w-4 h-4" /> Agregar Plato Manual
-                  </button>
+                <div className="flex justify-between items-center py-2 gap-3 flex-wrap">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <button 
+                      onClick={() => setParsedProducts([...parsedProducts, { name: '', price: 0, category: 'Varios', description: '' }])}
+                      className="text-xs text-orange-500 hover:text-orange-400 font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" /> Agregar Plato Manual
+                    </button>
+
+                    <label className="text-xs text-sky-400 hover:text-sky-300 font-bold flex items-center gap-1 cursor-pointer">
+                      <input
+                        type="file"
+                        multiple
+                        accept="image/*,application/pdf"
+                        className="hidden"
+                        onChange={handleAddProductsFromImages}
+                      />
+                      <Upload className="w-4 h-4" /> Agregar platos por imagen/PDF
+                    </label>
+                  </div>
                   <span className="text-xs text-slate-400">{parsedProducts.length} platos detectados</span>
                 </div>
 
@@ -1397,7 +1502,7 @@ export default function Dashboard() {
 
               <div className="space-y-8">
                 {orderedCategories.map((cat, catIdx) => {
-                  const catProducts = products.filter(p => p.category === cat);
+                  const catProducts = getProductsForCategory(cat);
                   return (
                     <div key={cat} className="space-y-3">
                       <h4 className="font-bold text-slate-300 border-b border-slate-900 pb-2 text-md flex items-center justify-between">
@@ -1408,7 +1513,16 @@ export default function Dashboard() {
                         {catProducts.map(p => (
                           <div 
                             key={p.id} 
-                            className="bg-slate-900/70 border border-slate-850 p-4 rounded-xl flex items-center justify-between gap-4"
+                            draggable
+                            onDragStart={() => setDraggedProductId(p.id)}
+                            onDragOver={(event) => event.preventDefault()}
+                            onDrop={async () => {
+                              if (!draggedProductId || draggedProductId === p.id) return;
+                              await reorderProductsInCategory(cat, draggedProductId, p.id);
+                              setDraggedProductId(null);
+                            }}
+                            onDragEnd={() => setDraggedProductId(null)}
+                            className="bg-slate-900/70 border border-slate-850 p-4 rounded-xl flex items-center justify-between gap-4 cursor-grab active:cursor-grabbing"
                           >
                             <div className="flex items-center gap-4 flex-1 truncate">
                               {p.image_url ? (
@@ -1434,34 +1548,56 @@ export default function Dashboard() {
                                 />
                               </div>
 
-                              <div className="flex gap-1">
-                                <button 
-                                  onClick={() => {
-                                    const customization = extractProductCustomization(p.description);
-                                    setEditingProduct(p);
-                                    setProdName(p.name);
-                                    setProdDesc(customization.cleanDescription || '');
-                                    setProdCustomizationTitle(customization.config?.title || '');
-                                    setProdCustomizationDescription(customization.config?.description || '');
-                                    hydrateCustomizationState(customization.config);
-                                    setProdPrice(p.price);
-                                    setProdCategory(p.category);
-                                    setProdAvailable(p.available);
-                                    setImageFile(null);
-                                    setSelectedStockUrl(p.image_url || '');
-                                    setProdError(null);
-                                    setIsAddingProduct(true);
-                                  }}
-                                  className="p-2 rounded-lg bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-850 cursor-pointer"
-                                >
-                                  <Pencil className="w-4 h-4" />
-                                </button>
-                                <button 
-                                  onClick={() => handleDeleteProduct(p.id)}
-                                  className="p-2 rounded-lg bg-slate-950 text-red-400 hover:text-red-300 hover:bg-slate-850 cursor-pointer"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
+                              <div className="flex items-center gap-2">
+                                <div className="flex flex-col gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => moveProductPosition(p.id, 'up')}
+                                    disabled={getProductsForCategory(p.category).findIndex(item => item.id === p.id) === 0}
+                                    className="p-1.5 rounded bg-slate-950 hover:bg-slate-850 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 cursor-pointer"
+                                    title="Subir"
+                                  >
+                                    <ArrowUp className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => moveProductPosition(p.id, 'down')}
+                                    disabled={getProductsForCategory(p.category).findIndex(item => item.id === p.id) === getProductsForCategory(p.category).length - 1}
+                                    className="p-1.5 rounded bg-slate-950 hover:bg-slate-850 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 cursor-pointer"
+                                    title="Bajar"
+                                  >
+                                    <ArrowDown className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                                <div className="flex gap-1">
+                                  <button 
+                                    onClick={() => {
+                                      const customization = extractProductCustomization(p.description);
+                                      setEditingProduct(p);
+                                      setProdName(p.name);
+                                      setProdDesc(customization.cleanDescription || '');
+                                      setProdCustomizationTitle(customization.config?.title || '');
+                                      setProdCustomizationDescription(customization.config?.description || '');
+                                      hydrateCustomizationState(customization.config);
+                                      setProdPrice(p.price);
+                                      setProdCategory(p.category);
+                                      setProdAvailable(p.available);
+                                      setImageFile(null);
+                                      setSelectedStockUrl(p.image_url || '');
+                                      setProdError(null);
+                                      setIsAddingProduct(true);
+                                    }}
+                                    className="p-2 rounded-lg bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-850 cursor-pointer"
+                                  >
+                                    <Pencil className="w-4 h-4" />
+                                  </button>
+                                  <button 
+                                    onClick={() => handleDeleteProduct(p.id)}
+                                    className="p-2 rounded-lg bg-slate-950 text-red-400 hover:text-red-300 hover:bg-slate-850 cursor-pointer"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           </div>
