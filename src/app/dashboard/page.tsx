@@ -246,6 +246,14 @@ export default function Dashboard() {
   const [menuFiles, setMenuFiles] = useState<File[]>([]);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
 
+  // Estados para importar platos con IA desde el Dashboard
+  const [isAiImportOpen, setIsAiImportOpen] = useState(false);
+  const [aiImportFiles, setAiImportFiles] = useState<File[]>([]);
+  const [aiImportExtracting, setAiImportExtracting] = useState(false);
+  const [aiImportProgress, setAiImportProgress] = useState('');
+  const [aiImportParsedProducts, setAiImportParsedProducts] = useState<any[]>([]);
+  const [aiImportError, setAiImportError] = useState<string | null>(null);
+
   // IA Loader
   const [isExtracting, setIsExtracting] = useState(false);
   const [iaProgress, setIaProgress] = useState('');
@@ -559,6 +567,101 @@ export default function Dashboard() {
       setOnboardingStep(3);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // ─── IA Dashboard: Importar platos adicionales ────────────────────────────
+  const handleDashboardAnalyzeMenu = async () => {
+    if (!aiImportFiles.length) return;
+    setAiImportExtracting(true);
+    setAiImportError(null);
+    setAiImportProgress('Conectando con la IA de Gemini...');
+    try {
+      const extractedProducts: any[] = [];
+      for (let index = 0; index < aiImportFiles.length; index += 1) {
+        setAiImportProgress(`Analizando archivo ${index + 1} de ${aiImportFiles.length}...`);
+        const products = await parseMenuFile(aiImportFiles[index]);
+        extractedProducts.push(...products);
+      }
+      if (extractedProducts.length === 0) throw new Error('No se encontró ningún plato válido.');
+      setAiImportParsedProducts(prev => [...prev, ...extractedProducts]);
+      setAiImportFiles([]);
+    } catch (err: any) {
+      setAiImportError(err.message || 'Error al procesar el menú');
+    } finally {
+      setAiImportExtracting(false);
+    }
+  };
+
+  const handleDashboardPublishImport = async () => {
+    setAiImportError(null);
+    setAiImportExtracting(true);
+    setAiImportProgress('Guardando platos en tu carta...');
+    try {
+      if (aiImportParsedProducts.length > 0) {
+        const prodsToInsert = aiImportParsedProducts.map(p => ({
+          restaurant_id: user.id,
+          name: p.name,
+          description: p.description || '',
+          price: Number(p.price) || 0,
+          category: p.category || 'Varios',
+          image_url: '',
+          available: true
+        }));
+        
+        const { error: prodsError } = await supabase.from('products').insert(prodsToInsert);
+        if (prodsError) throw prodsError;
+        
+        // Actualizar category_order si hay categorías nuevas
+        const currentCats = Array.from(new Set(products.map(p => p.category)));
+        const newCats = Array.from(new Set(aiImportParsedProducts.map(p => p.category || 'Varios')));
+        const addedCats = newCats.filter(c => !currentCats.includes(c));
+        
+        if (addedCats.length > 0) {
+          const updatedCatsOrder = [...(profile.category_order || []), ...addedCats];
+          await supabase.from('profiles').update({ category_order: updatedCatsOrder }).eq('id', user.id);
+          setProfile({ ...profile, category_order: updatedCatsOrder });
+        }
+      }
+      
+      // Recargar platos
+      const { data: freshProds } = await supabase
+        .from('products')
+        .select('*')
+        .eq('restaurant_id', user.id)
+        .order('category', { ascending: true });
+        
+      setProducts(freshProds || []);
+      setIsAiImportOpen(false);
+      setAiImportParsedProducts([]);
+      alert('¡Los platos se anexaron correctamente a tu menú inteligente! 🚀');
+    } catch (err: any) {
+      setAiImportError(err.message || 'Error al guardar la información');
+    } finally {
+      setAiImportExtracting(false);
+    }
+  };
+
+  const handleDashboardAddProductsFromImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    if (!selectedFiles.length) return;
+    setAiImportExtracting(true);
+    setAiImportError(null);
+    setAiImportProgress('Agregando platos desde nuevas imágenes o PDFs...');
+    try {
+      const extraProducts: any[] = [];
+      for (let index = 0; index < selectedFiles.length; index += 1) {
+        setAiImportProgress(`Procesando archivo adicional ${index + 1} de ${selectedFiles.length}...`);
+        const prods = await parseMenuFile(selectedFiles[index]);
+        extraProducts.push(...prods);
+      }
+      if (extraProducts.length === 0) throw new Error('No se detectaron platos válidos.');
+      setAiImportParsedProducts(prev => [...prev, ...extraProducts]);
+    } catch (err: any) {
+      setAiImportError(err.message || 'Error al agregar platos');
+    } finally {
+      setAiImportExtracting(false);
+      e.target.value = '';
     }
   };
 
@@ -1303,23 +1406,29 @@ export default function Dashboard() {
                 ) : (
                   <div className="space-y-6">
                     <div className="border-2 border-dashed border-slate-800 rounded-3xl p-8 text-center bg-slate-950/50 hover:border-orange-500/50 transition-colors relative group">
-                      <input type="file" multiple accept="image/*,application/pdf" onChange={(e) => setMenuFiles(Array.from(e.target.files || []))} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                      <input type="file" multiple accept="image/*,application/pdf" onChange={(e) => { const files = Array.from(e.target.files || []); setMenuFiles(prev => [...prev, ...files]); e.target.value = ''; }} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                       <div className="flex flex-col items-center justify-center space-y-3">
                         <Upload className="w-12 h-12 text-slate-500 group-hover:text-orange-500 transition-colors" />
                         <p className="font-semibold text-white">Haz clic o arrastra una o varias imágenes/PDF</p>
-                        <p className="text-xs text-slate-500">Soporta JPG, PNG y PDF. Puedes subir varias páginas.</p>
+                        <p className="text-xs text-slate-500">Soporta JPG, PNG y PDF. Puedes subir varias fotos una por una.</p>
                       </div>
                     </div>
 
                     {menuFiles.length > 0 && (
-                      <div className="space-y-3">
+                      <div className="space-y-3 text-left">
+                        <p className="text-xs font-semibold text-slate-400">Archivos seleccionados ({menuFiles.length}):</p>
                         {menuFiles.map((file, index) => (
-                          <div key={`${file.name}-${index}`} className="bg-slate-950/80 border border-slate-850 p-4 rounded-xl flex items-center gap-3">
-                            <Package className="w-8 h-8 text-orange-500" />
-                            <div>
-                              <p className="font-semibold text-sm max-w-[200px] truncate">{file.name}</p>
-                              <p className="text-xs text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                          <div key={`${file.name}-${index}`} className="bg-slate-950/80 border border-slate-850 p-4 rounded-xl flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <Package className="w-8 h-8 text-orange-500" />
+                              <div>
+                                <p className="font-semibold text-sm max-w-[200px] truncate">{file.name}</p>
+                                <p className="text-xs text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                              </div>
                             </div>
+                            <button onClick={() => setMenuFiles(prev => prev.filter((_, i) => i !== index))} className="p-2 text-slate-500 hover:text-red-400 cursor-pointer transition-colors" title="Eliminar archivo">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
                           </div>
                         ))}
                         <button onClick={() => setMenuFiles([])} className="text-xs text-red-400 hover:text-red-300 font-semibold cursor-pointer">
@@ -1535,6 +1644,17 @@ export default function Dashboard() {
                       </Button>
                     </div>
 
+                    <div className="p-4 bg-slate-950/80 border border-slate-850 rounded-2xl space-y-3">
+                      <div className="space-y-1">
+                        <span className="text-[10px] uppercase font-bold text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full">Tarea 3</span>
+                        <h4 className="font-bold text-sm text-white mt-1">Anexar platos con IA</h4>
+                        <p className="text-xs text-slate-400 leading-relaxed">Sube más fotos de tu carta física o fototeca para extraer platos con IA.</p>
+                      </div>
+                      <Button onClick={() => setIsAiImportOpen(true)} className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold text-xs py-4 cursor-pointer">
+                        <Sparkles className="w-4 h-4 mr-1 text-yellow-300 animate-pulse" /> Anexar Platos con IA
+                      </Button>
+                    </div>
+
                     {products.some(p => p.image_url && p.image_url.trim() !== '' && p.image_url !== 'null') && (
                       <div className="p-4 bg-red-950/10 border border-red-950/30 rounded-2xl space-y-2 text-left">
                         <h4 className="font-bold text-xs text-red-400">¿Deseas que tu menú no tenga ninguna imagen?</h4>
@@ -1556,6 +1676,9 @@ export default function Dashboard() {
               <div className="flex justify-between items-center">
                 <h3 className="text-lg font-bold">Listado de Platos y Productos</h3>
                 <div className="flex gap-2">
+                  <Button onClick={() => setIsAiImportOpen(true)} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold text-xs">
+                    <Sparkles className="w-4 h-4 mr-1 text-yellow-300 animate-pulse" /> Anexar platos con IA
+                  </Button>
                   <Button onClick={handleOpenOrderCategories} variant="outline" className="border-slate-800 text-slate-300 text-xs">
                     <Palette className="w-4 h-4 mr-1 text-orange-500" /> Ordenar Secciones
                   </Button>
@@ -2243,6 +2366,129 @@ export default function Dashboard() {
             <Button type="button" variant="outline" onClick={() => setIsOrderCategoriesOpen(false)} className="flex-1 border-slate-800 text-slate-300 cursor-pointer">Cancelar</Button>
             <Button onClick={handleSaveCategoryOrder} className="flex-1 bg-orange-500 text-white font-bold cursor-pointer">Guardar Orden</Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── DIALOG: ANEXAR PLATOS CON IA (DASHBOARD) ─── */}
+      <Dialog open={isAiImportOpen} onOpenChange={(open) => { if (!aiImportExtracting) setIsAiImportOpen(open); }}>
+        <DialogContent className="max-w-2xl bg-slate-950 border border-slate-850 text-white p-6 max-h-[90vh] overflow-y-auto scrollbar-hide flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-purple-400" /> Anexar Platos con IA
+            </DialogTitle>
+          </DialogHeader>
+
+          {aiImportError && (
+            <div className="bg-red-500/10 border border-red-500/30 text-red-200 p-4 rounded-xl flex items-start gap-3 my-3 text-sm text-left">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 text-red-400" />
+              <p>{aiImportError}</p>
+            </div>
+          )}
+
+          {aiImportExtracting ? (
+            <div className="py-12 flex flex-col items-center justify-center text-center space-y-4">
+              <Loader2 className="w-12 h-12 text-purple-500 animate-spin" />
+              <p className="text-lg font-bold">Gemini está analizando tu menú...</p>
+              <p className="text-sm text-slate-400 bg-slate-950/60 px-4 py-2 rounded-xl animate-pulse">{aiImportProgress}</p>
+            </div>
+          ) : (
+            <div className="space-y-6 flex-1 flex flex-col min-h-0">
+              {aiImportParsedProducts.length === 0 ? (
+                // Paso 1: Subir archivos
+                <div className="space-y-6 text-left">
+                  <p className="text-sm text-slate-400">
+                    Sube una o varias fotos de tu carta física o capturas de pantalla de tu fototeca. La IA de Gemini extraerá los nombres, precios, descripciones y categorías para anexarlos directamente.
+                  </p>
+                  
+                  <div className="border-2 border-dashed border-slate-800 rounded-3xl p-8 text-center bg-slate-950/50 hover:border-purple-500/50 transition-colors relative group">
+                    <input type="file" multiple accept="image/*,application/pdf" onChange={(e) => { const files = Array.from(e.target.files || []); setAiImportFiles(prev => [...prev, ...files]); e.target.value = ''; }} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                    <div className="flex flex-col items-center justify-center space-y-3">
+                      <Upload className="w-12 h-12 text-slate-500 group-hover:text-purple-500 transition-colors" />
+                      <p className="font-semibold text-white">Haz clic, toma una foto o arrastra imágenes/PDF</p>
+                      <p className="text-xs text-slate-500">Puedes subir múltiples fotos una por una o a la vez.</p>
+                    </div>
+                  </div>
+
+                  {aiImportFiles.length > 0 && (
+                    <div className="space-y-3">
+                      <p className="text-xs font-semibold text-slate-400">Fotos seleccionadas ({aiImportFiles.length}):</p>
+                      <div className="grid gap-2 max-h-48 overflow-y-auto pr-1">
+                        {aiImportFiles.map((file, index) => (
+                          <div key={`${file.name}-${index}`} className="bg-slate-900 border border-slate-850 p-3 rounded-xl flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <Package className="w-6 h-6 text-purple-400" />
+                              <div>
+                                <p className="font-semibold text-xs max-w-[250px] truncate">{file.name}</p>
+                                <p className="text-[10px] text-slate-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                              </div>
+                            </div>
+                            <button onClick={() => setAiImportFiles(prev => prev.filter((_, i) => i !== index))} className="p-1.5 text-slate-500 hover:text-red-400 cursor-pointer" title="Eliminar archivo">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={() => setAiImportFiles([])} className="text-xs text-red-400 hover:text-red-300 font-semibold cursor-pointer">
+                        Quitar todas
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="flex gap-3 pt-4 border-t border-slate-900">
+                    <Button type="button" variant="outline" onClick={() => setIsAiImportOpen(false)} className="flex-1 border-slate-800 text-slate-300 cursor-pointer">Cancelar</Button>
+                    <Button onClick={handleDashboardAnalyzeMenu} disabled={!aiImportFiles.length} className="flex-1 bg-gradient-to-r from-purple-600 to-indigo-600 font-bold text-white cursor-pointer">
+                      Analizar con IA <ChevronRight className="w-4 h-4 ml-1" />
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                // Paso 2: Revisar productos extraídos
+                <div className="space-y-6 text-left flex-1 flex flex-col min-h-0">
+                  <p className="text-sm text-slate-400">
+                    La IA detectó estos platos. Revisa y edita los datos antes de anexarlos a tu menú.
+                  </p>
+
+                  <div className="space-y-4 overflow-y-auto max-h-[45vh] pr-2 scrollbar-hide flex-1">
+                    {aiImportParsedProducts.map((p, index) => (
+                      <div key={index} className="bg-slate-900 p-4 rounded-xl border border-slate-850 grid grid-cols-1 sm:grid-cols-4 gap-3 relative">
+                        <div className="sm:col-span-2">
+                          <label className="text-[10px] text-slate-500 uppercase font-bold block mb-1">Nombre</label>
+                          <input value={p.name} onChange={(e) => { const u = [...aiImportParsedProducts]; u[index].name = e.target.value; setAiImportParsedProducts(u); }} className="w-full bg-slate-950 border border-slate-850 px-3 py-1.5 rounded-lg text-sm text-white" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-slate-500 uppercase font-bold block mb-1">Precio</label>
+                          <input type="number" value={p.price} onChange={(e) => { const u = [...aiImportParsedProducts]; u[index].price = Number(e.target.value); setAiImportParsedProducts(u); }} className="w-full bg-slate-950 border border-slate-850 px-3 py-1.5 rounded-lg text-sm text-white" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-slate-500 uppercase font-bold block mb-1">Categoría</label>
+                          <input value={p.category} onChange={(e) => { const u = [...aiImportParsedProducts]; u[index].category = e.target.value; setAiImportParsedProducts(u); }} className="w-full bg-slate-950 border border-slate-850 px-3 py-1.5 rounded-lg text-sm text-white" />
+                        </div>
+                        <button onClick={() => setAiImportParsedProducts(aiImportParsedProducts.filter((_, i) => i !== index))} className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-red-600 border border-red-500 text-white flex items-center justify-center hover:bg-red-500 transition-colors shadow-md text-xs font-bold cursor-pointer">×</button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex justify-between items-center py-2 gap-3 flex-wrap border-t border-slate-900 pt-4">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <button onClick={() => setAiImportParsedProducts([...aiImportParsedProducts, { name: '', price: 0, category: 'Varios', description: '' }])} className="text-xs text-purple-400 hover:text-purple-300 font-bold flex items-center gap-1 cursor-pointer">
+                        <Plus className="w-4 h-4" /> Agregar Plato Manual
+                      </button>
+                      <label className="text-xs text-sky-400 hover:text-sky-300 font-bold flex items-center gap-1 cursor-pointer">
+                        <input type="file" multiple accept="image/*,application/pdf" className="hidden" onChange={handleDashboardAddProductsFromImages} />
+                        <Upload className="w-4 h-4" /> Tomar/Subir más fotos
+                      </label>
+                    </div>
+                    <span className="text-xs text-slate-400">{aiImportParsedProducts.length} platos listos</span>
+                  </div>
+
+                  <div className="flex gap-3">
+                    <Button variant="outline" onClick={() => { setAiImportParsedProducts([]); setAiImportFiles([]); }} className="flex-1 border-slate-800 text-slate-350 cursor-pointer">Atrás</Button>
+                    <Button onClick={handleDashboardPublishImport} className="flex-1 bg-gradient-to-r from-purple-600 to-indigo-600 font-bold text-white cursor-pointer">Anexar a mi Menú 🚀</Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
