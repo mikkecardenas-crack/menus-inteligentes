@@ -299,6 +299,11 @@ export default function Dashboard() {
   const [movingProduct, setMovingProduct] = useState<any | null>(null);
   const [moveTargetCategory, setMoveTargetCategory] = useState('');
 
+  // Estados para agregar/editar secciones del menú
+  const [isAddingCategoryOpen, setIsAddingCategoryOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [categoryError, setCategoryError] = useState<string | null>(null);
+
   // Logo en settings
   const [settingsLogoFile, setSettingsLogoFile] = useState<File | null>(null);
   const [settingsLogoUploading, setSettingsLogoUploading] = useState(false);
@@ -1233,6 +1238,76 @@ export default function Dashboard() {
     }
   };
 
+  const handleCreateCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCategoryError(null);
+    const catName = newCategoryName.trim();
+    if (!catName) {
+      setCategoryError('El nombre de la sección no puede estar vacío.');
+      return;
+    }
+
+    const currentCats = profile.category_order || [];
+    if (currentCats.includes(catName)) {
+      setCategoryError('Ya existe una sección con este nombre.');
+      return;
+    }
+
+    const updatedOrder = [...currentCats, catName];
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ category_order: updatedOrder })
+        .eq('id', user.id);
+
+      if (error) throw error;
+      setProfile({ ...profile, category_order: updatedOrder });
+      setIsAddingCategoryOpen(false);
+      setNewCategoryName('');
+      alert(`Sección "${catName}" creada exitosamente.`);
+    } catch (err: any) {
+      setCategoryError(err.message || 'Error al guardar la sección');
+    }
+  };
+
+  const handleDeleteCategory = async (cat: string) => {
+    const catProducts = products.filter(p => p.category === cat);
+    const confirmMsg = catProducts.length > 0
+      ? `La sección "${cat}" contiene ${catProducts.length} plato(s). Si continúas, se eliminarán permanentemente todos estos platos. ¿Deseas eliminar la sección y sus platos?`
+      : `¿Estás seguro de eliminar la sección "${cat}"?`;
+
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      // 1. Si hay platos, borrarlos de la DB
+      if (catProducts.length > 0) {
+        const { error } = await supabase
+          .from('products')
+          .delete()
+          .eq('restaurant_id', user.id)
+          .eq('category', cat);
+        if (error) throw error;
+      }
+
+      // 2. Eliminar de la lista ordenada
+      const currentCats = profile.category_order || [];
+      const updatedOrder = currentCats.filter((c: string) => c !== cat);
+
+      const { error: profError } = await supabase
+        .from('profiles')
+        .update({ category_order: updatedOrder })
+        .eq('id', user.id);
+      if (profError) throw profError;
+
+      // 3. Actualizar estado local
+      setProfile({ ...profile, category_order: updatedOrder });
+      setProducts(prev => prev.filter(p => p.category !== cat));
+      alert(`Sección "${cat}" eliminada con éxito.`);
+    } catch (err: any) {
+      alert('Error al eliminar sección: ' + err.message);
+    }
+  };
+
   const publicUrl = profile ? `${typeof window !== 'undefined' ? window.location.origin : ''}/menu/${profile.slug}` : '';
 
   const handleCopyLink = () => {
@@ -1255,7 +1330,7 @@ export default function Dashboard() {
   const uniqueCats = Array.from(new Set(products.map(p => p.category)));
   const savedOrder = profile?.category_order || [];
   const orderedCategories = [
-    ...savedOrder.filter((c: string) => uniqueCats.includes(c)),
+    ...savedOrder,
     ...uniqueCats.filter((c: string) => !savedOrder.includes(c))
   ];
 
@@ -1679,6 +1754,9 @@ export default function Dashboard() {
                   <Button onClick={() => setIsAiImportOpen(true)} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold text-xs">
                     <Sparkles className="w-4 h-4 mr-1 text-yellow-300 animate-pulse" /> Anexar platos con IA
                   </Button>
+                  <Button onClick={() => setIsAddingCategoryOpen(true)} className="bg-slate-900 border border-slate-850 hover:bg-slate-850 text-slate-350 text-xs">
+                    <Plus className="w-4 h-4 mr-1 text-orange-500" /> Agregar Sección
+                  </Button>
                   <Button onClick={handleOpenOrderCategories} variant="outline" className="border-slate-800 text-slate-300 text-xs">
                     <Palette className="w-4 h-4 mr-1 text-orange-500" /> Ordenar Secciones
                   </Button>
@@ -1694,40 +1772,51 @@ export default function Dashboard() {
                   return (
                     <div key={cat} className="space-y-3">
                       <h4 className="font-bold text-slate-300 border-b border-slate-900 pb-2 text-md flex items-center justify-between">
-                        <span>{cat}</span>
+                        <div className="flex items-center gap-2">
+                          <span>{cat}</span>
+                          <button onClick={() => handleDeleteCategory(cat)} className="text-slate-500 hover:text-red-400 cursor-pointer p-1 rounded hover:bg-slate-900" title="Eliminar Sección">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                         <span className="text-xs text-slate-500 font-normal">{catProducts.length} productos</span>
                       </h4>
-                      <DndContext
-                        sensors={sensors}
-                        collisionDetection={closestCenter}
-                        onDragEnd={(event) => handleDragEnd(event, cat)}
-                      >
-                        <SortableContext items={catProducts.map(p => p.id)} strategy={verticalListSortingStrategy}>
-                          <div className="grid gap-3">
-                            {catProducts.map(p => (
-                              <SortableProduct
-                                key={p.id}
-                                product={p}
-                                catProducts={catProducts}
-                                formatPrice={formatPrice}
-                                onEdit={openProductForm}
-                                onDelete={handleDeleteProduct}
-                                onDuplicate={handleDuplicateProduct}
-                                onMoveCategory={(prod) => { setMovingProduct(prod); setMoveTargetCategory(prod.category); }}
-                                onMovePosition={moveProductPosition}
-                                toggleAvailability={toggleAvailability}
-                              />
-                            ))}
-                          </div>
-                        </SortableContext>
-                      </DndContext>
+                      {catProducts.length === 0 ? (
+                        <div className="text-center py-8 bg-slate-900/40 rounded-2xl border border-dashed border-slate-850 text-slate-500 text-xs">
+                          Sin platos en esta sección. Agrega un producto y asígnale esta categoría para comenzar.
+                        </div>
+                      ) : (
+                        <DndContext
+                          sensors={sensors}
+                          collisionDetection={closestCenter}
+                          onDragEnd={(event) => handleDragEnd(event, cat)}
+                        >
+                          <SortableContext items={catProducts.map(p => p.id)} strategy={verticalListSortingStrategy}>
+                            <div className="grid gap-3">
+                              {catProducts.map(p => (
+                                <SortableProduct
+                                  key={p.id}
+                                  product={p}
+                                  catProducts={catProducts}
+                                  formatPrice={formatPrice}
+                                  onEdit={openProductForm}
+                                  onDelete={handleDeleteProduct}
+                                  onDuplicate={handleDuplicateProduct}
+                                  onMoveCategory={(prod) => { setMovingProduct(prod); setMoveTargetCategory(prod.category); }}
+                                  onMovePosition={moveProductPosition}
+                                  toggleAvailability={toggleAvailability}
+                                />
+                              ))}
+                            </div>
+                          </SortableContext>
+                        </DndContext>
+                      )}
                     </div>
                   );
                 })}
 
-                {products.length === 0 && (
+                {orderedCategories.length === 0 && (
                   <div className="text-center py-12 bg-slate-900 rounded-3xl border border-dashed border-slate-800 text-slate-500 text-sm">
-                    No tienes productos agregados aún. Haz clic en "Agregar Producto".
+                    No tienes secciones ni productos agregados aún. Haz clic en "Agregar Sección" para comenzar.
                   </div>
                 )}
               </div>
@@ -2489,6 +2578,44 @@ export default function Dashboard() {
               )}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── DIALOG: AGREGAR SECCIÓN ─── */}
+      <Dialog open={isAddingCategoryOpen} onOpenChange={setIsAddingCategoryOpen}>
+        <DialogContent className="max-w-sm bg-slate-950 border border-slate-850 text-white p-6 rounded-2xl shadow-2xl">
+          <DialogHeader>
+            <DialogTitle>Nueva Sección / Categoría</DialogTitle>
+          </DialogHeader>
+
+          {categoryError && (
+            <div className="bg-red-500/10 border border-red-500/30 text-red-200 p-3 rounded-lg text-xs flex items-center gap-2 mb-3">
+              <AlertCircle className="w-4 h-4 text-red-400 font-bold" />
+              <span>{categoryError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleCreateCategory} className="space-y-4 text-left">
+            <div>
+              <label className="text-xs font-semibold text-slate-350 block mb-1">Nombre de la sección *</label>
+              <Input
+                required
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                placeholder="Ej: Postres, Bebidas..."
+                className="bg-slate-900 border-slate-850 text-white text-xs"
+                autoFocus
+              />
+            </div>
+            <div className="flex gap-3">
+              <Button type="button" variant="outline" onClick={() => { setIsAddingCategoryOpen(false); setNewCategoryName(''); setCategoryError(null); }} className="flex-1 border-slate-800 text-slate-300 cursor-pointer">
+                Cancelar
+              </Button>
+              <Button type="submit" className="flex-1 bg-orange-500 text-white font-bold cursor-pointer">
+                Crear Sección
+              </Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
     </div>
