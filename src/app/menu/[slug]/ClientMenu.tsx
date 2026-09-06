@@ -6,6 +6,7 @@ import {
   UtensilsCrossed, Store, User, MessageCircle, Trash2, ShieldAlert, Sparkles
 } from 'lucide-react';
 import { extractProductCustomization } from '@/lib/productCustomization';
+import { calculateFinalPrice, getProductDisplayStartingPrice, getProductPricingMode, getGroupPricingRole } from '@/lib/pricingEngine';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -153,6 +154,7 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
         .filter(Boolean)
         .map((group: any) => ({
           ...group,
+          pricing_role: getGroupPricingRole(group),
           options: [...(group.customization_options || [])].sort(
             (a: any, b: any) => (a.display_order || 0) - (b.display_order || 0)
           ),
@@ -168,6 +170,7 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
         required: g.required || false,
         min_selections: g.minSelections || 0,
         max_selections: g.maxSelections || 1,
+        pricing_role: getGroupPricingRole(g),
         options: (g.options || []).map((o: any) => ({
           id: o.id,
           label: o.label,
@@ -210,28 +213,23 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
     return overrides;
   };
 
-  /** Calcula el precio total: precio base del producto + suma de precios de opciones seleccionadas */
+  /** Calcula el precio total: utiliza el motor de precios unificado (pricingEngine) */
   const calculateDynamicPrice = (
     product: any,
     groups: any[],
     selection: Record<string, string[]>
   ): number => {
-    let runningTotal = Number(product.price) || 0;
-    for (const group of groups) {
-      for (const optId of selection[group.id] || []) {
-        const opt = group.options?.find((o: any) => o.id === optId);
-        if (opt?.price) runningTotal += Number(opt.price);
-      }
-    }
-    return runningTotal;
+    return calculateFinalPrice(product, groups, selection);
   };
 
   /** Construye el resumen de selecciones para el carrito y mensaje de WhatsApp */
   const buildCustomizationSummary = (groups: any[], selection: Record<string, string[]>): any => ({
+    pricing_mode: getProductPricingMode(selectedProduct),
     groups: groups
       .filter(g => (selection[g.id] || []).length > 0)
       .map(g => ({
         label: g.name,
+        pricing_role: getGroupPricingRole(g),
         values: (selection[g.id] || []).map((optId: string) => {
           const opt = g.options?.find((o: any) => o.id === optId);
           return opt?.label || optId;
@@ -535,7 +533,11 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
                   </div>
                   <div className="flex items-center justify-between mt-2">
                     <span className="font-extrabold text-sm" style={{ color: profile.primary_color }}>
-                      {formatPrice(product.price)}
+                      {(() => {
+                        const groups = getProductGroupsData(product);
+                        const starting = getProductDisplayStartingPrice(product, groups);
+                        return starting.isStartingPrice ? `Desde ${formatPrice(starting.price)}` : formatPrice(product.price);
+                      })()}
                     </span>
                     
                     {cartItem ? (
@@ -616,7 +618,22 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
                   <div>
                     <h2 className="text-lg font-bold text-white">{selectedProduct.name}</h2>
                     <p className="text-slate-400 text-xs mt-1">{selectedProduct.description}</p>
-                    <p className="text-lg font-extrabold mt-2" style={{ color: profile.primary_color }}>{formatPrice(selectedProduct.price)}</p>
+                    {(() => {
+                      const mode = getProductPricingMode(selectedProduct);
+                      if (mode === 'max_selected_option') {
+                        const starting = getProductDisplayStartingPrice(selectedProduct, groups);
+                        return (
+                          <p className="text-lg font-extrabold mt-2" style={{ color: profile.primary_color }}>
+                            {starting.isStartingPrice ? `Desde ${formatPrice(starting.price)}` : (Number(selectedProduct.price) > 0 ? formatPrice(selectedProduct.price) : 'Elige tus opciones')}
+                          </p>
+                        );
+                      }
+                      return (
+                        <p className="text-lg font-extrabold mt-2" style={{ color: profile.primary_color }}>
+                          {formatPrice(selectedProduct.price)}
+                        </p>
+                      );
+                    })()}
                   </div>
 
                   {groups.length > 0 && (
@@ -673,7 +690,7 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
                                       {option.label}
                                       {Number(option.price) > 0 && (
                                         <span className={`text-[10px] font-bold ${selected ? 'text-white/80' : 'text-slate-500'}`}>
-                                          +{formatPrice(Number(option.price))}
+                                          {group.pricing_role === 'dominant' ? formatPrice(Number(option.price)) : `+${formatPrice(Number(option.price))}`}
                                         </span>
                                       )}
                                     </button>
@@ -760,7 +777,7 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
                           </button>
                         </div>
                         <span className="font-bold text-sm" style={{ color: profile.primary_color }}>
-                          {formatPrice(item.product.price * item.quantity)}
+                          {formatPrice((item.unitPrice ?? item.product.price) * item.quantity)}
                         </span>
                       </div>
                     </div>

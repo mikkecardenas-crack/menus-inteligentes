@@ -2,6 +2,18 @@
 // Tipos compartidos para el sistema de personalización global
 // ================================================================
 
+// ─── Modos de cálculo de precio por producto ─────────────────────────────────
+// 'standard'           → precio base del producto, sin modificaciones (comportamiento por defecto)
+// 'base_plus_options'  → precio base + suma de opciones con precio (grupos con role=additive)
+// 'max_selected_option'→ MAX(precio de opciones en grupos role=dominant) + suma de grupos role=additive
+export type PricingMode = 'standard' | 'base_plus_options' | 'max_selected_option';
+
+// ─── Rol del grupo en el cálculo de precio ────────────────────────────────────
+// 'additive'  → su precio se suma siempre (complementos, extras)
+// 'dominant'  → participa en el MAX (sabores de pizza, tamaños con precios diferentes)
+// 'free'      → no afecta el precio (observaciones, elecciones sin costo extra)
+export type PricingRole = 'additive' | 'dominant' | 'free';
+
 export interface CustomizationOption {
   id: string;
   group_id: string;
@@ -21,6 +33,7 @@ export interface CustomizationGroup {
   display_order: number;
   created_at?: string;
   options: CustomizationOption[];
+  pricing_role?: PricingRole; // 'additive' por defecto (retrocompatible)
 }
 
 export interface ProductCustomizationGroupLink {
@@ -43,6 +56,7 @@ export interface Product {
   available: boolean;
   display_order: number;
   created_at: string;
+  pricing_mode?: PricingMode; // 'standard' por defecto (retrocompatible)
   // Relación con grupos (viene del join en el menú público)
   customization_links?: ProductCustomizationGroupLink[];
 }
@@ -86,3 +100,4 @@ export interface CustomizationRule {
   effect_value: number;       // valor del efecto (ej: 3 para máx=3)
   display_order: number;
 }
+

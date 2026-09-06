@@ -6,7 +6,8 @@ import { createClient } from '@/lib/supabase/client';
 import { getPlaceholderImage, STOCK_IMAGES } from '@/lib/stockImages';
 import { buildProductDescription, extractProductCustomization } from '@/lib/productCustomization';
 import { migrateEmbeddedCustomizations, isMigrationDone, markMigrationDone } from '@/lib/migrateCustomizations';
-import type { CustomizationGroup, CustomizationOption, CustomizationRule } from '@/lib/types';
+import type { CustomizationGroup, CustomizationOption, CustomizationRule, PricingMode, PricingRole } from '@/lib/types';
+import { getProductPricingMode, getGroupPricingRole } from '@/lib/pricingEngine';
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent
 } from '@dnd-kit/core';
@@ -146,7 +147,27 @@ function SortableProduct({
           <p className="text-xs text-slate-400 truncate max-w-[200px]">
             {extractProductCustomization(product.description).cleanDescription || product.description}
           </p>
-          <span className="text-xs font-bold text-orange-400">{formatPrice(product.price)}</span>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="text-xs font-bold text-orange-400">{formatPrice(product.price)}</span>
+            {(() => {
+              const mode = getProductPricingMode(product);
+              if (mode === 'max_selected_option') {
+                return (
+                  <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded font-medium">
+                    Mayor valor (Pizza)
+                  </span>
+                );
+              }
+              if (mode === 'base_plus_options') {
+                return (
+                  <span className="text-[9px] bg-blue-500/20 text-blue-300 border border-blue-500/30 px-1.5 py-0.5 rounded font-medium">
+                    + Adicionales
+                  </span>
+                );
+              }
+              return null;
+            })()}
+          </div>
         </div>
       </div>
 
@@ -271,6 +292,7 @@ export default function Dashboard() {
   const [prodPrice, setProdPrice] = useState(0);
   const [prodCategory, setProdCategory] = useState('');
   const [prodAvailable, setProdAvailable] = useState(true);
+  const [prodPricingMode, setProdPricingMode] = useState<PricingMode>('standard');
   const [prodError, setProdError] = useState<string | null>(null);
   const [prodLoading, setProdLoading] = useState(false);
   // Grupos seleccionados para el producto en edición
@@ -316,6 +338,7 @@ export default function Dashboard() {
   const [groupRequired, setGroupRequired] = useState(false);
   const [groupMin, setGroupMin] = useState(0);
   const [groupMax, setGroupMax] = useState(1);
+  const [groupPricingRole, setGroupPricingRole] = useState<PricingRole>('additive');
   const [groupOptions, setGroupOptions] = useState<{ id: string; label: string; price: number }[]>([]);
   const [groupSaving, setGroupSaving] = useState(false);
   const [groupError, setGroupError] = useState<string | null>(null);
@@ -759,12 +782,14 @@ export default function Dashboard() {
     setEditingProduct(product);
     if (product) {
       const { cleanDescription } = extractProductCustomization(product.description);
+      const pureDesc = (cleanDescription || '').replace(/__PRICING_MODE:[a-z_]+__/, '').trim();
       setProdName(product.name);
-      setProdDesc(cleanDescription || '');
+      setProdDesc(pureDesc);
       setProdPrice(product.price);
       setProdCategory(product.category);
       setProdAvailable(product.available);
       setSelectedStockUrl(product.image_url || '');
+      setProdPricingMode(getProductPricingMode(product));
     } else {
       setProdName('');
       setProdDesc('');
@@ -772,6 +797,7 @@ export default function Dashboard() {
       setProdCategory(orderedCategories[0] || 'Platos');
       setProdAvailable(true);
       setSelectedStockUrl('');
+      setProdPricingMode('standard');
     }
     setImageFile(null);
     setProdError(null);
@@ -859,20 +885,39 @@ export default function Dashboard() {
       }
 
       let productId = editingProduct?.id;
+      const basePayload: any = {
+        name: prodName,
+        description: prodDesc,
+        price: prodPrice,
+        category: prodCategory,
+        available: prodAvailable,
+        image_url: final_image_url,
+      };
 
       if (editingProduct) {
-        const { error } = await supabase.from('products').update({
-          name: prodName, description: prodDesc, price: prodPrice,
-          category: prodCategory, available: prodAvailable, image_url: final_image_url
-        }).eq('id', editingProduct.id);
-        if (error) throw error;
+        let updateData: any = { ...basePayload, pricing_mode: prodPricingMode };
+        const { error } = await supabase.from('products').update(updateData).eq('id', editingProduct.id);
+        if (error && (error.code === '42703' || error.message?.includes('pricing_mode'))) {
+          // Fallback seguro si la columna no existe en Supabase
+          const fallbackDesc = `${prodDesc.trim()} __PRICING_MODE:${prodPricingMode}__`.trim();
+          updateData = { ...basePayload, description: fallbackDesc };
+          delete updateData.pricing_mode;
+          const retry = await supabase.from('products').update(updateData).eq('id', editingProduct.id);
+          if (retry.error) throw retry.error;
+        } else if (error) {
+          throw error;
+        }
       } else {
-        const { data: newProd, error } = await supabase.from('products').insert({
-          restaurant_id: user.id, name: prodName, description: prodDesc, price: prodPrice,
-          category: prodCategory, available: prodAvailable, image_url: final_image_url
-        }).select('id').single();
-        if (error) throw error;
-        productId = newProd.id;
+        let insertData: any = { restaurant_id: user.id, ...basePayload, pricing_mode: prodPricingMode };
+        let res = await supabase.from('products').insert(insertData).select('id').single();
+        if (res.error && (res.error.code === '42703' || res.error.message?.includes('pricing_mode'))) {
+          const fallbackDesc = `${prodDesc.trim()} __PRICING_MODE:${prodPricingMode}__`.trim();
+          insertData = { restaurant_id: user.id, ...basePayload, description: fallbackDesc };
+          delete insertData.pricing_mode;
+          res = await supabase.from('products').insert(insertData).select('id').single();
+        }
+        if (res.error) throw res.error;
+        productId = res.data.id;
       }
 
       // Sincronizar grupos seleccionados
@@ -935,17 +980,27 @@ export default function Dashboard() {
   const handleDuplicateProduct = async (product: any) => {
     try {
       const { cleanDescription } = extractProductCustomization(product.description);
-      const { data: newProd, error } = await supabase.from('products').insert({
+      const pureDesc = (cleanDescription || product.description || '').replace(/__PRICING_MODE:[a-z_]+__/, '').trim();
+      const pMode = getProductPricingMode(product);
+      let dupData: any = {
         restaurant_id: user.id,
         name: `Copia de ${product.name}`,
-        description: cleanDescription || product.description || '',
+        description: pureDesc,
         price: product.price,
         category: product.category,
         image_url: product.image_url || '',
         available: false, // pausado por defecto para que el admin lo revise
         display_order: (product.display_order || 0) + 1,
-      }).select('id').single();
-      if (error) throw error;
+        pricing_mode: pMode,
+      };
+      let { data: newProd, error } = await supabase.from('products').insert(dupData).select('id').single();
+      if (error && (error.code === '42703' || error.message?.includes('pricing_mode'))) {
+        dupData.description = `${pureDesc} __PRICING_MODE:${pMode}__`.trim();
+        delete dupData.pricing_mode;
+        const retry = await supabase.from('products').insert(dupData).select('id').single();
+        if (retry.error) throw retry.error;
+        newProd = retry.data;
+      } else if (error) throw error;
 
       // Copiar vínculos de grupos
       const { data: links } = await supabase
@@ -1001,11 +1056,13 @@ export default function Dashboard() {
   const openGroupEditor = (group: CustomizationGroup | null) => {
     setEditingGroup(group);
     if (group) {
+      const pureDesc = (group.description || '').replace(/__PRICING_ROLE:[a-z_]+__/, '').trim();
       setGroupName(group.name);
-      setGroupDescription(group.description);
+      setGroupDescription(pureDesc);
       setGroupRequired(group.required);
       setGroupMin(group.min_selections);
       setGroupMax(group.max_selections);
+      setGroupPricingRole(getGroupPricingRole(group));
       setGroupOptions((group.options || []).map(o => ({ id: o.id, label: o.label, price: o.price })));
     } else {
       setGroupName('');
@@ -1013,6 +1070,7 @@ export default function Dashboard() {
       setGroupRequired(false);
       setGroupMin(0);
       setGroupMax(1);
+      setGroupPricingRole('additive');
       setGroupOptions([{ id: `new-${Date.now()}`, label: '', price: 0 }]);
     }
     setGroupError(null);
@@ -1026,22 +1084,41 @@ export default function Dashboard() {
     try {
       const validOptions = groupOptions.filter(o => o.label.trim());
       let savedGroupId = editingGroup?.id;
+      let groupPayload: any = {
+        name: groupName.trim(),
+        description: groupDescription.trim(),
+        required: groupRequired,
+        min_selections: groupMin,
+        max_selections: groupMax,
+        pricing_role: groupPricingRole,
+      };
 
       if (editingGroup) {
-        const { error } = await supabase.from('customization_groups').update({
-          name: groupName.trim(), description: groupDescription.trim(),
-          required: groupRequired, min_selections: groupMin, max_selections: groupMax,
-        }).eq('id', editingGroup.id);
-        if (error) throw error;
+        let { error } = await supabase.from('customization_groups').update(groupPayload).eq('id', editingGroup.id);
+        if (error && (error.code === '42703' || error.message?.includes('pricing_role'))) {
+          const fallbackDesc = `${groupDescription.trim()} __PRICING_ROLE:${groupPricingRole}__`.trim();
+          groupPayload.description = fallbackDesc;
+          delete groupPayload.pricing_role;
+          const retry = await supabase.from('customization_groups').update(groupPayload).eq('id', editingGroup.id);
+          if (retry.error) throw retry.error;
+        } else if (error) throw error;
         // Eliminar opciones viejas y re-insertar
         await supabase.from('customization_options').delete().eq('group_id', editingGroup.id);
       } else {
-        const { data: newGroup, error } = await supabase.from('customization_groups').insert({
-          restaurant_id: user.id, name: groupName.trim(), description: groupDescription.trim(),
-          required: groupRequired, min_selections: groupMin, max_selections: groupMax, display_order: customizationGroups.length,
-        }).select('id').single();
-        if (error) throw error;
-        savedGroupId = newGroup.id;
+        let insertPayload: any = {
+          restaurant_id: user.id,
+          ...groupPayload,
+          display_order: customizationGroups.length,
+        };
+        let res = await supabase.from('customization_groups').insert(insertPayload).select('id').single();
+        if (res.error && (res.error.code === '42703' || res.error.message?.includes('pricing_role'))) {
+          const fallbackDesc = `${groupDescription.trim()} __PRICING_ROLE:${groupPricingRole}__`.trim();
+          insertPayload.description = fallbackDesc;
+          delete insertPayload.pricing_role;
+          res = await supabase.from('customization_groups').insert(insertPayload).select('id').single();
+        }
+        if (res.error) throw res.error;
+        savedGroupId = res.data.id;
       }
 
       if (savedGroupId && validOptions.length > 0) {
@@ -1857,6 +1934,28 @@ export default function Dashboard() {
                               <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-semibold">
                                 {group.min_selections === 0 ? 'Opcional' : `Mín. ${group.min_selections}`} · Máx. {group.max_selections}
                               </span>
+                              {(() => {
+                                const role = getGroupPricingRole(group);
+                                if (role === 'dominant') {
+                                  return (
+                                    <span className="text-[10px] bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded-full font-bold">
+                                      Precio principal (Pizza)
+                                    </span>
+                                  );
+                                }
+                                if (role === 'free') {
+                                  return (
+                                    <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-semibold">
+                                      Sin costo
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <span className="text-[10px] bg-blue-500/10 text-blue-400 border border-blue-500/20 px-2 py-0.5 rounded-full font-semibold">
+                                    Adicional
+                                  </span>
+                                );
+                              })()}
                             </div>
                             {group.description && <p className="text-xs text-slate-400 mt-1">{group.description}</p>}
 
@@ -2051,6 +2150,73 @@ export default function Dashboard() {
               <textarea value={prodDesc} onChange={(e) => setProdDesc(e.target.value)} placeholder="Ingredientes o descripción..." className="w-full bg-slate-900 border border-slate-850 p-3 rounded-xl text-sm focus:outline-none focus:border-orange-500 text-white h-20 resize-none" />
             </div>
 
+            {/* ─── 💰 Configuración de precio ─── */}
+            <div className="space-y-3 rounded-2xl border border-slate-850 bg-slate-900/50 p-4">
+              <div>
+                <label className="text-xs font-semibold text-slate-300 block mb-0.5">💰 Configuración de precio</label>
+                <p className="text-[11px] text-slate-500">Define cómo se calcula el precio al seleccionar opciones o adicionales.</p>
+              </div>
+
+              <div className="grid gap-2">
+                {/* 1. standard */}
+                <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${
+                  prodPricingMode === 'standard' ? 'bg-orange-500/10 border-orange-500/40' : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                }`}>
+                  <input
+                    type="radio"
+                    name="prodPricingMode"
+                    value="standard"
+                    checked={prodPricingMode === 'standard'}
+                    onChange={() => setProdPricingMode('standard')}
+                    className="mt-0.5 accent-orange-500"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-bold text-white">Precio estándar</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">El producto mantiene su precio normal.</p>
+                  </div>
+                </label>
+
+                {/* 2. base_plus_options */}
+                <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${
+                  prodPricingMode === 'base_plus_options' ? 'bg-orange-500/10 border-orange-500/40' : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                }`}>
+                  <input
+                    type="radio"
+                    name="prodPricingMode"
+                    value="base_plus_options"
+                    checked={prodPricingMode === 'base_plus_options'}
+                    onChange={() => setProdPricingMode('base_plus_options')}
+                    className="mt-0.5 accent-orange-500"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-bold text-white">Precio base + adicionales</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Se suma el precio de los adicionales seleccionados al precio base.</p>
+                  </div>
+                </label>
+
+                {/* 3. max_selected_option */}
+                <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${
+                  prodPricingMode === 'max_selected_option' ? 'bg-orange-500/10 border-orange-500/40' : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                }`}>
+                  <input
+                    type="radio"
+                    name="prodPricingMode"
+                    value="max_selected_option"
+                    checked={prodPricingMode === 'max_selected_option'}
+                    onChange={() => setProdPricingMode('max_selected_option')}
+                    className="mt-0.5 accent-orange-500"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-xs font-bold text-white">Cobrar la opción de mayor valor</p>
+                      <span className="text-[9px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-1.5 py-0.5 rounded font-bold">Pizzas</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Si el cliente selecciona varias opciones, se cobrará únicamente la de mayor precio.</p>
+                  </div>
+                </label>
+              </div>
+            </div>
+
             {/* Grupos de personalización */}
             <div className="space-y-3 rounded-2xl border border-slate-850 bg-slate-900/50 p-4">
               <div className="flex items-center justify-between">
@@ -2181,6 +2347,54 @@ export default function Dashboard() {
             <div>
               <label className="text-xs font-semibold text-slate-300 block mb-1">Descripción (opcional)</label>
               <Input value={groupDescription} onChange={(e) => setGroupDescription(e.target.value)} placeholder="Ej: Selecciona 1 salsa para tu pedido" className="bg-slate-900 border-slate-850 text-white" />
+            </div>
+
+            {/* ─── Participación en el precio ─── */}
+            <div className="space-y-1.5 rounded-xl border border-slate-850 bg-slate-900/50 p-3">
+              <label className="text-xs font-semibold text-slate-300 block">Participación en el precio</label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setGroupPricingRole('additive')}
+                  className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                    groupPricingRole === 'additive'
+                      ? 'bg-orange-500/15 border-orange-500/60 text-white'
+                      : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                  }`}
+                >
+                  <p className="text-[11px] font-bold text-white">Adicional</p>
+                  <p className="text-[9px] text-slate-400 mt-0.5 leading-tight">Suma su valor al precio final.</p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setGroupPricingRole('dominant')}
+                  className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                    groupPricingRole === 'dominant'
+                      ? 'bg-orange-500/15 border-orange-500/60 text-white'
+                      : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                  }`}
+                >
+                  <p className="text-[11px] font-bold text-white flex items-center gap-1">
+                    <span>Principal</span>
+                    <span className="text-[8px] bg-amber-500/20 text-amber-400 px-1 rounded font-bold">Pizza</span>
+                  </p>
+                  <p className="text-[9px] text-slate-400 mt-0.5 leading-tight">Participa en el cobro del mayor valor.</p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setGroupPricingRole('free')}
+                  className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                    groupPricingRole === 'free'
+                      ? 'bg-orange-500/15 border-orange-500/60 text-white'
+                      : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                  }`}
+                >
+                  <p className="text-[11px] font-bold text-white">Sin costo</p>
+                  <p className="text-[9px] text-slate-400 mt-0.5 leading-tight">No altera el precio.</p>
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-3 gap-3">
