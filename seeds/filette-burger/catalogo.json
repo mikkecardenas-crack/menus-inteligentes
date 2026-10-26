@@ -1,0 +1,284 @@
+{
+  "_fuente": "Notion · Carta vigente · Filette · Productos y precios · 19 oct 2026 (FIL-001 a FIL-026)",
+  "_pendientes": [
+    "Logo en alta calidad, color principal y fotos de los platos pendientes"
+  ],
+  "profile": {
+    "name": "Filette Burger",
+    "slug": "filette-burger",
+    "whatsapp": "573219780565",
+    "primary_color": null,
+    "logo_url": null,
+    "category_order": [
+      "Hamburguesas",
+      "Hamburguesas especiales",
+      "Hamburguesas premium",
+      "Combos",
+      "Parrillas",
+      "Especialidades",
+      "Línea rápida",
+      "Acompañamientos",
+      "Bebidas"
+    ]
+  },
+  "customization_groups": [
+    {
+      "key": "proteina_clasica",
+      "name": "Elige tu carne",
+      "description": "",
+      "required": true,
+      "min_selections": 1,
+      "max_selections": 1,
+      "pricing_role": "free",
+      "options": [
+        {
+          "label": "Res",
+          "price": 0
+        },
+        {
+          "label": "Cerdo",
+          "price": 0
+        },
+        {
+          "label": "Pollo",
+          "price": 0
+        }
+      ]
+    },
+    {
+      "key": "adiciones",
+      "name": "Adiciones",
+      "description": "Agrega extras a tu pedido",
+      "required": false,
+      "min_selections": 0,
+      "max_selections": 5,
+      "pricing_role": "additive",
+      "options": [
+        {
+          "label": "Carne hamburguesa",
+          "price": 6000
+        },
+        {
+          "label": "Tocineta",
+          "price": 5000
+        },
+        {
+          "label": "Queso",
+          "price": 3000
+        },
+        {
+          "label": "Salchicha",
+          "price": 5000
+        },
+        {
+          "label": "Chorizo",
+          "price": 5000
+        }
+      ]
+    }
+  ],
+  "products": [
+    {
+      "ref": "FIL-001",
+      "category": "Hamburguesas",
+      "name": "Clásica",
+      "price": 12000,
+      "description": "Carne (res, cerdo o pollo), lechuga, tomate, cebolla y salsas",
+      "pricing_mode": "base_plus_options",
+      "groups": [
+        "proteina_clasica",
+        "adiciones"
+      ]
+    },
+    {
+      "ref": "FIL-002",
+      "category": "Hamburguesas especiales",
+      "name": "Mexicana",
+      "price": 17000,
+      "description": "Carne, chile con carne, jalapeños, guacamole, queso y vegetales",
+      "pricing_mode": "base_plus_options",
+      "groups": [
+        "adiciones"
+      ]
+    },
+    {
+      "ref": "FIL-003",
+      "category": "Hamburguesas especiales",
+      "name": "BBQ",
+      "price": 17000,
+      "description": "Carne, tocineta, costillitas, cebolla frita, queso, salsa BBQ y vegetales",
+      "pricing_mode": "base_plus_options",
+      "groups": [
+        "adiciones"
+      ]
+    },
+    {
+      "ref": "FIL-004",
+      "category": "Hamburguesas especiales",
+      "name": "Colombianísima",
+      "price": 17000,
+      "description": "Carne, mix de ahogao de la casa, maíz tierno, queso y chorizo artesanal",
+      "pricing_mode": "base_plus_options",
+      "groups": [
+        "adiciones"
+      ]
+    },
+    {
+      "ref": "FIL-005",
+      "category": "Hamburguesas especiales",
+      "name": "Mazorcada",
+      "price": 17000,
+      "description": "Carne, maíz tierno, papa chip, jamón premium, queso y lechuga fresca",
+      "pricing_mode": "base_plus_options",
+      "groups": [
+        "adiciones"
+      ]
+    },
+    {
+      "ref": "FIL-006",
+      "category": "Hamburguesas premium",
+      "name": "Cheese Burger",
+      "price": 28000,
+      "description": "2 carnes, tocineta, queso americano, queso cheddar y cebolla caramelizada",
+      "pricing_mode": "base_plus_options",
+      "groups": [
+        "adiciones"
+      ]
+    },
+    {
+      "ref": "FIL-007",
+      "category": "Combos",
+      "name": "Combo mini",
+      "price": 13000,
+      "description": "Hamburguesa mini + 1/2 papa francesa + gaseosa 400 ml",
+      "pricing_mode": "standard",
+      "groups": []
+    },
+    {
+      "ref": "FIL-008",
+      "category": "Parrillas",
+      "name": "Parrillada grande",
+      "price": 30000,
+      "description": "Mix de carnes (res, pechuga y chorizo) + papas + yuca",
+      "pricing_mode": "standard",
+      "groups": []
+    },
+    {
+      "ref": "FIL-009",
+      "category": "Parrillas",
+      "name": "Mini parrillada",
+      "price": 16000,
+      "description": "Mix de carnes, papas + yuca",
+      "pricing_mode": "standard",
+      "groups": []
+    },
+    {
+      "ref": "FIL-010",
+      "category": "Parrillas",
+      "name": "Pechuga grande",
+      "price": 20000,
+      "description": "Pechuga de pollo a la plancha + mix de fritos + ensalada fresca",
+      "pricing_mode": "standard",
+      "groups": []
+    },
+    {
+      "ref": "FIL-011",
+      "category": "Parrillas",
+      "name": "Pechuga JR",
+      "price": 13000,
+      "description": "Porción de pechuga de pollo + mix de fritos",
+      "pricing_mode": "standard",
+      "groups": []
+    },
+    {
+      "ref": "FIL-012",
+      "category": "Parrillas",
+      "name": "Churrasco",
+      "price": 30000,
+      "description": "Corte de res a la parrilla, tierno y sazonado al punto",
+      "pricing_mode": "standard",
+      "groups": []
+    },
+    {
+      "ref": "FIL-013",
+      "category": "Especialidades",
+      "name": "Taco Leo",
+      "price": 20000,
+      "description": "Tortilla, mix de carnes, julianas, queso, guacamole, papa a la francesa, vegetales frescos y salsa de la casa",
+      "pricing_mode": "standard",
+      "groups": []
+    },
+    {
+      "ref": "FIL-014",
+      "category": "Especialidades",
+      "name": "Salchipapa de la casa",
+      "price": 22000,
+      "description": "Salchicha premium, pollo dorado, papa a la francesa, queso y salsa especial",
+      "pricing_mode": "standard",
+      "groups": []
+    },
+    {
+      "ref": "FIL-015",
+      "category": "Línea rápida",
+      "name": "Perro",
+      "price": 10000,
+      "description": "Pan artesanal, salchicha premium y salsas",
+      "pricing_mode": "standard",
+      "groups": []
+    },
+    {
+      "ref": "FIL-016",
+      "category": "Línea rápida",
+      "name": "Salchipapa",
+      "price": 15000,
+      "description": "Salchicha premium, papas y salsas",
+      "pricing_mode": "standard",
+      "groups": []
+    },
+    {
+      "ref": "FIL-017",
+      "category": "Acompañamientos",
+      "name": "Papa francesa",
+      "price": 5000,
+      "description": "",
+      "pricing_mode": "standard",
+      "groups": []
+    },
+    {
+      "ref": "FIL-018",
+      "category": "Acompañamientos",
+      "name": "Papa casco",
+      "price": 5000,
+      "description": "",
+      "pricing_mode": "standard",
+      "groups": []
+    },
+    {
+      "ref": "FIL-019",
+      "category": "Acompañamientos",
+      "name": "Quesadillas x2",
+      "price": 9000,
+      "description": "",
+      "pricing_mode": "standard",
+      "groups": []
+    },
+    {
+      "ref": "FIL-025",
+      "category": "Bebidas",
+      "name": "Personales",
+      "price": 5000,
+      "description": "",
+      "pricing_mode": "standard",
+      "groups": []
+    },
+    {
+      "ref": "FIL-026",
+      "category": "Bebidas",
+      "name": "Malteadas",
+      "price": 12000,
+      "description": "",
+      "pricing_mode": "standard",
+      "groups": []
+    }
+  ]
+}

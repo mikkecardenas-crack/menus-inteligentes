@@ -1,0 +1,499 @@
+{
+  "_fuente": "Catálogo Ricolandia (Sistema empresarial/ricolandia, corte 17/10/2026) · precios de bebidas confirmados 19/10/2026",
+  "_pendientes": [
+    "WhatsApp oficial",
+    "Precio y presentación de los 9 alimentos (cargados como no disponibles)",
+    "Imagen de Mr. Tea",
+    "Sabores de Agua Brisa, Hit 500 ml, Gatorade y Hit 1 L"
+  ],
+  "profile": {
+    "name": "Ricolandia",
+    "slug": "ricolandia",
+    "whatsapp": "",
+    "primary_color": null,
+    "logo": "imagenes/logo.jpg",
+    "category_order": [
+      "Panadería",
+      "Antojos salados",
+      "Gaseosas",
+      "Jugos y té",
+      "Aguas",
+      "Hidratación",
+      "Energizantes",
+      "Maltas"
+    ]
+  },
+  "customization_groups": [],
+  "products": [
+    {
+      "name": "Buñuelo tradicional",
+      "description": "Por unidad · precio por confirmar",
+      "price": 0,
+      "category": "Panadería",
+      "available": false,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/00-01-Bunuelo-tradicional.webp"
+    },
+    {
+      "name": "Pan de yuca",
+      "description": "Por unidad · precio por confirmar",
+      "price": 0,
+      "category": "Panadería",
+      "available": false,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/00-02-Pan-de-yuca.webp"
+    },
+    {
+      "name": "Pan de queso",
+      "description": "Por unidad · precio por confirmar",
+      "price": 0,
+      "category": "Panadería",
+      "available": false,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/00-03-Pan-de-queso.webp"
+    },
+    {
+      "name": "Pandebono natural",
+      "description": "Por unidad · precio por confirmar",
+      "price": 0,
+      "category": "Panadería",
+      "available": false,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/00-04-Pandebono-natural.webp"
+    },
+    {
+      "name": "Pandebono de arequipe",
+      "description": "Por unidad · precio por confirmar",
+      "price": 0,
+      "category": "Panadería",
+      "available": false,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/00-05-Pandebono-arequipe.webp"
+    },
+    {
+      "name": "Pandebono de bocadillo",
+      "description": "Por unidad · precio por confirmar",
+      "price": 0,
+      "category": "Panadería",
+      "available": false,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/00-06-Pandebono-bocadillo.webp"
+    },
+    {
+      "name": "Empanada mixta",
+      "description": "Por unidad · precio por confirmar",
+      "price": 0,
+      "category": "Antojos salados",
+      "available": false,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/00-07-Empanada-mixta.webp"
+    },
+    {
+      "name": "Pastel de pollo",
+      "description": "Por unidad · precio por confirmar",
+      "price": 0,
+      "category": "Antojos salados",
+      "available": false,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/00-08-Pastel-de-pollo.webp"
+    },
+    {
+      "name": "Papa rellena",
+      "description": "Por unidad · precio por confirmar",
+      "price": 0,
+      "category": "Antojos salados",
+      "available": false,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/00-09-Papa-rellena.webp"
+    },
+    {
+      "name": "Hidralyte · Fresa-kiwi",
+      "description": "",
+      "price": 4500,
+      "category": "Hidratación",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/01-hidralyte-fresa-kiwi.webp"
+    },
+    {
+      "name": "Hidralyte · Morazul",
+      "description": "",
+      "price": 4500,
+      "category": "Hidratación",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/02-hidralyte-mora-azul.webp"
+    },
+    {
+      "name": "Speed Max · Lata",
+      "description": "",
+      "price": 2500,
+      "category": "Energizantes",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/03-speed-max-lata.webp"
+    },
+    {
+      "name": "Cola y Pola · Lata",
+      "description": "",
+      "price": 3500,
+      "category": "Gaseosas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/04-cola-y-pola-lata.webp"
+    },
+    {
+      "name": "Amper · Mango",
+      "description": "",
+      "price": 4500,
+      "category": "Energizantes",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/05-Amper-Party-mango.webp"
+    },
+    {
+      "name": "Predator",
+      "description": "",
+      "price": 4500,
+      "category": "Energizantes",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/06-Amper-Predator-blanco.webp"
+    },
+    {
+      "name": "Agua Brisa · Sabores · 280 ml",
+      "description": "Sabor según disponibilidad; se confirma al pedir",
+      "price": 2000,
+      "category": "Aguas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/07-agua-brisa-sabores-280-ml.webp"
+    },
+    {
+      "name": "Agua Cristal · 300 ml",
+      "description": "",
+      "price": 1500,
+      "category": "Aguas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/08-agua-cristal-300-ml.webp"
+    },
+    {
+      "name": "Pony Malta Mini",
+      "description": "",
+      "price": 2500,
+      "category": "Maltas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/09-pony-malta-mini.webp"
+    },
+    {
+      "name": "Coca-Cola · Minipet",
+      "description": "",
+      "price": 2500,
+      "category": "Gaseosas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/10-coca-cola-minipet.webp"
+    },
+    {
+      "name": "Coca-Cola Zero · Minipet",
+      "description": "",
+      "price": 2500,
+      "category": "Gaseosas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/11-coca-cola-zero-minipet.webp"
+    },
+    {
+      "name": "California · Botella",
+      "description": "",
+      "price": 3800,
+      "category": "Jugos y té",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/12-california-botella.webp"
+    },
+    {
+      "name": "Jugo Hit · Caja pequeña",
+      "description": "",
+      "price": 2500,
+      "category": "Jugos y té",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/13-jugo-hit-caja-pequena.webp"
+    },
+    {
+      "name": "Jugo California · Caja pequeña",
+      "description": "",
+      "price": 2500,
+      "category": "Jugos y té",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/14-jugo-california-caja-pequena.webp"
+    },
+    {
+      "name": "Agua Cristal · 600 ml",
+      "description": "",
+      "price": 2000,
+      "category": "Aguas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/15-agua-cristal-600-ml.webp"
+    },
+    {
+      "name": "Coca-Cola · 400 ml",
+      "description": "",
+      "price": 3500,
+      "category": "Gaseosas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/16-coca-cola-400-ml.webp"
+    },
+    {
+      "name": "Coca-Cola Zero · 400 ml",
+      "description": "",
+      "price": 3500,
+      "category": "Gaseosas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/17-coca-cola-zero-400-ml.webp"
+    },
+    {
+      "name": "Mr. Tea · 600 ml",
+      "description": "",
+      "price": 3500,
+      "category": "Jugos y té",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": null
+    },
+    {
+      "name": "Soda Schweppes · 400 ml",
+      "description": "",
+      "price": 3500,
+      "category": "Gaseosas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/19-schweppes-soda-400-ml.webp"
+    },
+    {
+      "name": "Fuze Tea · 400 ml",
+      "description": "",
+      "price": 3500,
+      "category": "Jugos y té",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/20-fuze-tea-400-ml.webp"
+    },
+    {
+      "name": "Néctar Pulp · 400 ml",
+      "description": "",
+      "price": 3500,
+      "category": "Jugos y té",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/21-nectar-pulp-400-ml.webp"
+    },
+    {
+      "name": "Del Valle Fresh · 400 ml",
+      "description": "",
+      "price": 3500,
+      "category": "Jugos y té",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/22-del-valle-fresh-400-ml.webp"
+    },
+    {
+      "name": "Pony Malta · PET · 330 ml",
+      "description": "",
+      "price": 3800,
+      "category": "Maltas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/23-pony-malta-pet-330-ml.webp"
+    },
+    {
+      "name": "Hit · Sabores · PET · 500 ml",
+      "description": "Sabor según disponibilidad; se confirma al pedir",
+      "price": 3500,
+      "category": "Jugos y té",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/24-jugo-hit-sabores-pet-500-ml.webp"
+    },
+    {
+      "name": "Gatorade · Sabores",
+      "description": "Sabor según disponibilidad; se confirma al pedir",
+      "price": 4500,
+      "category": "Hidratación",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/25-gatorade-sabores.webp"
+    },
+    {
+      "name": "Saviloe · 420 ml",
+      "description": "",
+      "price": 3500,
+      "category": "Jugos y té",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/26-saviloe-420-ml.webp"
+    },
+    {
+      "name": "Saviloe · 320 ml",
+      "description": "",
+      "price": 3000,
+      "category": "Jugos y té",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/27-saviloe-320-ml.webp"
+    },
+    {
+      "name": "Vive 100 · Verde · 380 ml",
+      "description": "",
+      "price": 3500,
+      "category": "Energizantes",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/28-vive-100-verde-380-ml.webp"
+    },
+    {
+      "name": "Vive 100 · Verde · 240 ml",
+      "description": "",
+      "price": 3000,
+      "category": "Energizantes",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/30-vive-100-verde-240-ml.webp"
+    },
+    {
+      "name": "Vive 100 · Sandía · 380 ml",
+      "description": "",
+      "price": 3500,
+      "category": "Energizantes",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/29-vive-100-sandia-380-ml.webp"
+    },
+    {
+      "name": "Vive 100 · Sandía · 240 ml",
+      "description": "",
+      "price": 3000,
+      "category": "Energizantes",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/31-vive-100-sandia-240-ml.webp"
+    },
+    {
+      "name": "Coca-Cola · 1,5 litros",
+      "description": "",
+      "price": 8000,
+      "category": "Gaseosas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/32-coca-cola-1-5-litros.webp"
+    },
+    {
+      "name": "Quatro · 1,5 litros",
+      "description": "",
+      "price": 8000,
+      "category": "Gaseosas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/33-quatro-1-5-litros.webp"
+    },
+    {
+      "name": "Sprite · 1,5 litros",
+      "description": "",
+      "price": 8000,
+      "category": "Gaseosas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/34-sprite-1-5-litros.webp"
+    },
+    {
+      "name": "Natumalta · 1,5 litros",
+      "description": "",
+      "price": 8000,
+      "category": "Maltas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/35-natumalta-1-5-litros.webp"
+    },
+    {
+      "name": "Coca-Cola · 1 litro",
+      "description": "",
+      "price": 5500,
+      "category": "Gaseosas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/36-coca-cola-1-litro.webp"
+    },
+    {
+      "name": "Natumalta · 1 litro",
+      "description": "",
+      "price": 5500,
+      "category": "Maltas",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/37-natumalta-1-litro.webp"
+    },
+    {
+      "name": "Jugo Hit · 1 litro",
+      "description": "Sabor según disponibilidad; se confirma al pedir",
+      "price": 5500,
+      "category": "Jugos y té",
+      "available": true,
+      "pricing_mode": "standard",
+      "groups": [],
+      "image": "imagenes/38-jugo-hit-sabores-1-litro.webp"
+    }
+  ]
+}
