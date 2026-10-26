@@ -49,7 +49,7 @@ export default async function MenuPage({ params }: { params: Promise<{ slug: str
         id,
         display_order,
         customization_groups (
-          id, name, description, required, min_selections, max_selections,
+          id, name, description, required, min_selections, max_selections, pricing_role,
           customization_options (id, label, price, display_order)
         )
       ),
