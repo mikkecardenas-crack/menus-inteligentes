@@ -8,6 +8,7 @@ import { buildProductDescription, extractProductCustomization } from '@/lib/prod
 import { migrateEmbeddedCustomizations, isMigrationDone, markMigrationDone } from '@/lib/migrateCustomizations';
 import type { CustomizationGroup, CustomizationOption, CustomizationRule, PricingMode, PricingRole } from '@/lib/types';
 import { getProductPricingMode, getGroupPricingRole } from '@/lib/pricingEngine';
+import { getMenuUrl } from '@/lib/subdomain';
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent
 } from '@dnd-kit/core';
@@ -1385,7 +1386,7 @@ export default function Dashboard() {
     }
   };
 
-  const publicUrl = profile ? `${typeof window !== 'undefined' ? window.location.origin : ''}/menu/${profile.slug}` : '';
+  const publicUrl = profile ? getMenuUrl(profile, typeof window !== 'undefined' ? window.location.origin : '') : '';
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(publicUrl);
@@ -1715,7 +1716,7 @@ export default function Dashboard() {
               <span className={`w-2 h-2 rounded-full ${profile.is_open ? 'bg-emerald-400' : 'bg-red-400'}`} />
               {profile.is_open ? 'Abierto' : 'Cerrado'}
             </span>
-            <a href={`/menu/${profile.slug}`} target="_blank"
+            <a href={publicUrl} target="_blank"
               className="text-xs font-semibold text-slate-400 hover:text-white border border-slate-800 px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors">
               <Eye className="w-4 h-4" /> Ver Menú Público
             </a>

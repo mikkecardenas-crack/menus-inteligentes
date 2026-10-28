@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Store, Trash2, Key, Phone, ShieldAlert, LogOut, Loader2, AlertCircle, Eye, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { ROOT_DOMAIN, getMenuUrl, normalizeSubdomain } from '@/lib/subdomain';
 
 export default function AdminPage() {
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
@@ -16,6 +17,8 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [subdomainDrafts, setSubdomainDrafts] = useState<Record<string, string>>({});
+  const [savingSubdomainId, setSavingSubdomainId] = useState<string | null>(null);
 
   // Verificar sesión admin
   useEffect(() => {
@@ -104,6 +107,42 @@ export default function AdminPage() {
       alert('Error: ' + err.message);
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleSaveSubdomain = async (business: any) => {
+    const draft = normalizeSubdomain(subdomainDrafts[business.id] ?? business.subdomain ?? '');
+    const adminPhone = sessionStorage.getItem('adminPhone') || '';
+    const adminPass = sessionStorage.getItem('adminPassword') || '';
+
+    setSavingSubdomainId(business.id);
+    try {
+      const res = await fetch('/api/admin/businesses', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-phone': adminPhone,
+          'x-admin-password': adminPass,
+        },
+        body: JSON.stringify({ id: business.id, subdomain: draft || null }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error al guardar el subdominio');
+
+      setBusinesses(prev => prev.map(b => (b.id === business.id ? { ...b, subdomain: data.subdomain } : b)));
+      setSubdomainDrafts(prev => {
+        const next = { ...prev };
+        delete next[business.id];
+        return next;
+      });
+      if (data.subdomain) {
+        alert(`Subdominio guardado: ${data.subdomain}.${ROOT_DOMAIN}\n\nRecuerda agregar ${data.subdomain}.${ROOT_DOMAIN} en Vercel → Settings → Domains para activarlo.`);
+      }
+    } catch (err: any) {
+      alert('Error: ' + err.message);
+    } finally {
+      setSavingSubdomainId(null);
     }
   };
 
@@ -249,8 +288,11 @@ export default function AdminPage() {
             ) : (
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
                 {businesses.map((b) => {
-                  const menuLink = typeof window !== 'undefined' ? `${window.location.origin}/menu/${b.slug}` : `/menu/${b.slug}`;
+                  const menuLink = typeof window !== 'undefined' ? getMenuUrl(b, window.location.origin) : `/menu/${b.slug}`;
                   const isDeleting = deletingId === b.id;
+                  const subdomainDraft = subdomainDrafts[b.id] ?? b.subdomain ?? '';
+                  const isSavingSubdomain = savingSubdomainId === b.id;
+                  const subdomainChanged = normalizeSubdomain(subdomainDraft) !== (b.subdomain ?? '');
                   return (
                     <div
                       key={b.id}
@@ -308,9 +350,30 @@ export default function AdminPage() {
                               rel="noreferrer"
                               className="font-bold text-sky-400 hover:text-sky-300 flex items-center gap-0.5 max-w-[170px] truncate"
                             >
-                              <span>/{b.slug}</span>
+                              <span>{b.subdomain ? `${b.subdomain}.${ROOT_DOMAIN}` : `/${b.slug}`}</span>
                               <ExternalLink className="w-3 h-3" />
                             </a>
+                          </div>
+                          <div className="pt-2">
+                            <span className="text-slate-400 block mb-1.5">Subdominio:</span>
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 flex items-center bg-slate-950 border border-slate-850 rounded-lg px-2.5 py-1.5 min-w-0">
+                                <input
+                                  value={subdomainDraft}
+                                  onChange={(e) => setSubdomainDrafts(prev => ({ ...prev, [b.id]: e.target.value }))}
+                                  placeholder="nombrecorto"
+                                  className="bg-transparent outline-none text-white font-semibold min-w-0 flex-1"
+                                />
+                                <span className="text-slate-500 flex-shrink-0">.{ROOT_DOMAIN}</span>
+                              </div>
+                              <Button
+                                onClick={() => handleSaveSubdomain(b)}
+                                disabled={isSavingSubdomain || !subdomainChanged}
+                                className="bg-sky-600 hover:bg-sky-700 text-white text-xs py-1.5 px-3 rounded-lg cursor-pointer disabled:opacity-40"
+                              >
+                                {isSavingSubdomain ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Guardar'}
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       </div>

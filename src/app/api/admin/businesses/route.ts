@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { isValidSubdomain, normalizeSubdomain } from '@/lib/subdomain';
 
 function isAuthorized(req: NextRequest) {
   const phone = req.headers.get('x-admin-phone');
@@ -120,5 +121,50 @@ export async function POST(req: NextRequest) {
   } catch (err: any) {
     console.error('[Admin] Error en proceso de eliminación:', err);
     return NextResponse.json({ error: err.message || 'Error al eliminar negocio' }, { status: 500 });
+  }
+}
+
+// Asigna o quita el subdominio de un negocio (<subdomain>.menuinteligente.site)
+export async function PATCH(req: NextRequest) {
+  if (!isAuthorized(req)) {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+  }
+
+  try {
+    const { id, subdomain: raw } = await req.json();
+    if (!id) {
+      return NextResponse.json({ error: 'ID de negocio requerido' }, { status: 400 });
+    }
+
+    const subdomain = raw ? normalizeSubdomain(String(raw)) : null;
+    if (subdomain !== null && !isValidSubdomain(subdomain)) {
+      return NextResponse.json({ error: `"${subdomain}" no es un subdominio válido o está reservado.` }, { status: 400 });
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !supabaseKey) {
+      return NextResponse.json({ error: 'Faltan variables de entorno de Supabase' }, { status: 500 });
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { error } = await supabase.from('profiles').update({ subdomain }).eq('id', id);
+    if (error) {
+      if (error.code === '23505') {
+        return NextResponse.json({ error: `El subdominio "${subdomain}" ya lo usa otro negocio.` }, { status: 409 });
+      }
+      if (error.code === '42703' || error.code === 'PGRST204') {
+        return NextResponse.json({ error: 'Falta la columna subdomain. Ejecuta migration_subdomains.sql en Supabase.' }, { status: 500 });
+      }
+      throw error;
+    }
+
+    return NextResponse.json({ subdomain });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || 'Error al guardar el subdominio' }, { status: 500 });
   }
 }
