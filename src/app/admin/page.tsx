@@ -10,6 +10,7 @@ export default function AdminPage() {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [loggingIn, setLoggingIn] = useState(false);
 
   // Estados del Dashboard Admin
   const [businesses, setBusinesses] = useState<any[]>([]);
@@ -17,48 +18,59 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // Verificar sesión admin
+  // Verificar sesión admin (cookie httpOnly validada en el servidor)
   useEffect(() => {
-    const savedPhone = sessionStorage.getItem('adminPhone');
-    const savedPassword = sessionStorage.getItem('adminPassword');
-    if (savedPhone === '3132382592' && savedPassword === 'Administrador$') {
-      setIsAdminLoggedIn(true);
-      fetchBusinesses(savedPhone, savedPassword);
-    }
+    fetch('/api/admin/session')
+      .then(res => res.json())
+      .then(data => {
+        if (data.authenticated) {
+          setIsAdminLoggedIn(true);
+          fetchBusinesses();
+        }
+      })
+      .catch(() => {});
   }, []);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
+    setLoggingIn(true);
 
-    if (phone.trim() === '3132382592' && password === 'Administrador$') {
-      sessionStorage.setItem('adminPhone', phone);
-      sessionStorage.setItem('adminPassword', password);
+    try {
+      const res = await fetch('/api/admin/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo iniciar sesión');
+
+      setPassword('');
       setIsAdminLoggedIn(true);
-      fetchBusinesses(phone, password);
-    } else {
-      setLoginError('Número de celular o contraseña de administrador incorrectos.');
+      fetchBusinesses();
+    } catch (err: any) {
+      setLoginError(err.message);
+    } finally {
+      setLoggingIn(false);
     }
   };
 
-  const handleLogout = () => {
-    sessionStorage.removeItem('adminPhone');
-    sessionStorage.removeItem('adminPassword');
+  const handleLogout = async () => {
+    await fetch('/api/admin/session', { method: 'DELETE' }).catch(() => {});
     setIsAdminLoggedIn(false);
     setBusinesses([]);
   };
 
-  const fetchBusinesses = async (adminPhone: string, adminPass: string) => {
+  const fetchBusinesses = async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/admin/businesses', {
-        headers: {
-          'x-admin-phone': adminPhone,
-          'x-admin-password': adminPass,
-        },
-      });
+      const res = await fetch('/api/admin/businesses');
 
+      if (res.status === 401) {
+        setIsAdminLoggedIn(false);
+        throw new Error('Tu sesión de administrador expiró. Vuelve a iniciar sesión.');
+      }
       if (!res.ok) {
         throw new Error('Fallo al obtener la lista de negocios');
       }
@@ -77,18 +89,11 @@ export default function AdminPage() {
     
     if (!confirm(confirmMsg)) return;
 
-    const adminPhone = sessionStorage.getItem('adminPhone') || '';
-    const adminPass = sessionStorage.getItem('adminPassword') || '';
-
     setDeletingId(business.id);
     try {
       const res = await fetch('/api/admin/businesses', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-phone': adminPhone,
-          'x-admin-password': adminPass,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: business.id }),
       });
 
@@ -154,7 +159,7 @@ export default function AdminPage() {
                   required
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  placeholder="3132382592"
+                  placeholder="Tu número de celular"
                   className="bg-slate-950 border-slate-850 py-6 pl-12 pr-4 text-white text-sm"
                 />
               </div>
@@ -179,9 +184,10 @@ export default function AdminPage() {
 
             <Button
               type="submit"
-              className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold py-6 rounded-xl transition-all cursor-pointer shadow-lg shadow-purple-500/10"
+              disabled={loggingIn}
+              className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold py-6 rounded-xl transition-all cursor-pointer shadow-lg shadow-purple-500/10 disabled:opacity-60"
             >
-              Ingresar al Control General
+              {loggingIn ? 'Verificando...' : 'Ingresar al Control General'}
             </Button>
           </form>
         </div>

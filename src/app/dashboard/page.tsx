@@ -1518,7 +1518,7 @@ export default function Dashboard() {
 
                   <div>
                     <label className="text-xs font-semibold text-slate-300 block mb-2">Número de WhatsApp para Pedidos *</label>
-                    <Input value={whatsapp} onChange={(e) => setWhatsapp(e.target.value)} placeholder="Ej: +573132382592" className="bg-slate-950 border-slate-850 text-white" />
+                    <Input value={whatsapp} onChange={(e) => setWhatsapp(e.target.value)} placeholder="Ej: +573001234567" className="bg-slate-950 border-slate-850 text-white" />
                   </div>
 
                   <div>

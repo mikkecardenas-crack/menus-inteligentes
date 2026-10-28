@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { isAdminRequest } from '@/lib/adminAuth';
 
 function isAuthorized(req: NextRequest) {
-  const phone = req.headers.get('x-admin-phone');
-  const password = req.headers.get('x-admin-password');
-  return phone === '3132382592' && password === 'Administrador$';
+  return isAdminRequest(req);
 }
 
 export async function GET(req: NextRequest) {
