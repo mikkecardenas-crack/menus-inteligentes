@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { addCartItem, getCartItemKey, getCartTotal, removeCartItem, setCartItemQuantity, type CartItem } from '@/lib/cart';
 import { 
   ShoppingCart, Plus, Minus, ChevronRight, MapPin, 
   UtensilsCrossed, Store, User, MessageCircle, Trash2, ShieldAlert, Sparkles
@@ -14,14 +15,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 interface ClientMenuProps {
   profile: any;
   initialProducts: any[];
-}
-
-interface CartItem {
-  product: any;
-  quantity: number;
-  notes: string;
-  customization?: any;
-  unitPrice?: number; // precio calculado incluyendo extras de opciones seleccionadas
 }
 
 type DeliveryType = 'delivery' | 'table' | 'pickup';
@@ -100,38 +93,20 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
   }, [categories, activeCategory]);
 
   const addToCart = (product: any, notes = '', customization: any = null, unitPrice?: number) => {
-    setItems(prev => {
-      const existing = prev.find(item => item.product.id === product.id);
-      if (existing) {
-        return prev.map(item =>
-          item.product.id === product.id
-            ? { ...item, quantity: item.quantity + 1, customization: customization || item.customization }
-            : item
-        );
-      }
-      return [...prev, { product, quantity: 1, notes, customization, unitPrice }];
-    });
+    setItems(prev => addCartItem(prev, { product, notes, customization, unitPrice }));
   };
 
-  const removeFromCart = (productId: string) => {
-    setItems(prev => prev.filter(item => item.product.id !== productId));
+  const removeFromCart = (lineKey: string) => {
+    setItems(prev => removeCartItem(prev, lineKey));
   };
 
-  const updateQuantity = (productId: string, quantity: number) => {
-    if (quantity <= 0) {
-      removeFromCart(productId);
-      return;
-    }
-    setItems(prev =>
-      prev.map(item =>
-        item.product.id === productId ? { ...item, quantity } : item
-      )
-    );
+  const updateQuantity = (lineKey: string, quantity: number) => {
+    setItems(prev => setCartItemQuantity(prev, lineKey, quantity));
   };
 
   const clearCart = () => setItems([]);
 
-  const total = items.reduce((sum, item) => sum + (item.unitPrice ?? item.product.price) * item.quantity, 0);
+  const total = getCartTotal(items);
   const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
 
   const formatPrice = (price: number) => {
@@ -513,7 +488,9 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
         
         <div className="grid gap-3">
           {categoryProducts.map(product => {
-            const cartItem = items.find(i => i.product.id === product.id);
+            const productLines = items.filter(i => i.product.id === product.id);
+            const cartItem = productLines[productLines.length - 1];
+            const productQuantity = productLines.reduce((sum, item) => sum + item.quantity, 0);
             return (
               <div 
                 key={product.id} 
@@ -543,14 +520,16 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
                     {cartItem ? (
                       <div className="flex items-center gap-2 bg-slate-950 border border-slate-850 rounded-full px-1.5 py-0.5 shadow-md">
                         <button 
-                          onClick={() => updateQuantity(product.id, cartItem.quantity - 1)}
+                          aria-label={productLines.length > 1 ? `Revisar variantes de ${product.name}` : `Quitar una unidad de ${product.name}`}
+                          onClick={() => productLines.length > 1 ? startCheckout() : updateQuantity(getCartItemKey(cartItem), cartItem.quantity - 1)}
                           className="w-6 h-6 rounded-full flex items-center justify-center hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
                         >
                           <Minus className="w-3.5 h-3.5" />
                         </button>
-                        <span className="font-bold text-xs w-4 text-center">{cartItem.quantity}</span>
+                        <span className="font-bold text-xs w-4 text-center">{productQuantity}</span>
                         <button 
-                          onClick={() => updateQuantity(product.id, cartItem.quantity + 1)}
+                          aria-label={`Agregar otra variante de ${product.name}`}
+                          onClick={() => handleSelectProduct(product)}
                           className="w-6 h-6 rounded-full flex items-center justify-center hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
                         >
                           <Plus className="w-3.5 h-3.5" />
@@ -558,6 +537,7 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
                       </div>
                     ) : (
                       <button 
+                        aria-label={`Agregar ${product.name}`}
                         onClick={() => handleSelectProduct(product)}
                         className="w-8 h-8 rounded-full text-white flex items-center justify-center shadow-lg transition-transform hover:scale-110 cursor-pointer"
                         style={{ backgroundColor: profile.primary_color }}
@@ -756,7 +736,7 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
               </DialogHeader>
               <div className="space-y-3 max-h-[40vh] overflow-y-auto pr-1 scrollbar-hide">
                 {items.map(item => (
-                  <div key={item.product.id} className="flex gap-3 p-3 bg-slate-900 border border-slate-850 rounded-xl relative">
+                  <div key={getCartItemKey(item)} className="flex gap-3 p-3 bg-slate-900 border border-slate-850 rounded-xl relative">
                     {item.product.image_url && item.product.image_url.trim() !== '' && item.product.image_url !== 'null' && (
                       <img src={item.product.image_url} alt={item.product.name} className="w-14 h-14 rounded-lg object-cover flex-shrink-0" />
                     )}
@@ -768,11 +748,11 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
                       ) : null}
                       <div className="flex items-center justify-between mt-2">
                         <div className="flex items-center gap-2 bg-slate-950 border border-slate-850 rounded-full px-1 py-0.5">
-                          <button onClick={() => updateQuantity(item.product.id, item.quantity - 1)} className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-white">
+                          <button aria-label={`Quitar una unidad de ${item.product.name}`} onClick={() => updateQuantity(getCartItemKey(item), item.quantity - 1)} className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-white">
                             <Minus className="w-3 h-3" />
                           </button>
                           <span className="text-xs font-bold w-4 text-center">{item.quantity}</span>
-                          <button onClick={() => updateQuantity(item.product.id, item.quantity + 1)} className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-white">
+                          <button aria-label={`Agregar una unidad de ${item.product.name}`} onClick={() => updateQuantity(getCartItemKey(item), item.quantity + 1)} className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-white">
                             <Plus className="w-3 h-3" />
                           </button>
                         </div>
@@ -781,7 +761,7 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
                         </span>
                       </div>
                     </div>
-                    <button onClick={() => removeFromCart(item.product.id)} className="text-slate-500 hover:text-red-400 absolute top-3 right-3 cursor-pointer">
+                    <button aria-label={`Eliminar ${item.product.name} del pedido`} onClick={() => removeFromCart(getCartItemKey(item))} className="text-slate-500 hover:text-red-400 absolute top-3 right-3 cursor-pointer">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
@@ -791,7 +771,7 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
                 <span>Total</span>
                 <span style={{ color: profile.primary_color }}>{formatPrice(total)}</span>
               </div>
-              <Button onClick={nextStep} className="w-full text-white font-bold py-6 cursor-pointer" style={{ backgroundColor: profile.primary_color }}>
+              <Button onClick={nextStep} disabled={items.length === 0} className="w-full text-white font-bold py-6 cursor-pointer" style={{ backgroundColor: profile.primary_color }}>
                 Continuar <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
             </div>
@@ -1011,14 +991,15 @@ export default function ClientMenu({ profile: initialProfile, initialProducts }:
               
               <div className="border-t border-slate-900 pt-3 space-y-2 max-h-[25vh] overflow-y-auto pr-1 scrollbar-hide">
                 {items.map(item => (
-                  <div key={item.product.id} className="flex justify-between text-xs text-slate-300 gap-2">
+                  <div key={getCartItemKey(item)} className="flex justify-between text-xs text-slate-300 gap-2">
                     <div className="text-left">
                       <span>{item.quantity}x {item.product.name}</span>
+                      {item.notes && <p className="text-[10px] text-slate-400 italic mt-0.5">"{item.notes}"</p>}
                       {item.customization?.groups?.length ? (
                         <p className="text-[10px] text-slate-500 mt-1">{item.customization.groups.map((group: any) => `${group.label}: ${group.values.join(', ')}`).join(' • ')}</p>
                       ) : null}
                     </div>
-                    <span className="font-bold">{formatPrice(item.product.price * item.quantity)}</span>
+                    <span className="font-bold">{formatPrice((item.unitPrice ?? item.product.price) * item.quantity)}</span>
                   </div>
                 ))}
               </div>

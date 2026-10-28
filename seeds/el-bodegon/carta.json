@@ -1,0 +1,66 @@
+{
+  "fuente": "marcas/bodegon/menu Bodegon/IMG_3178-3180.jpg (carta publicada el 4 de noviembre de 2025)",
+  "tamanos_pizza": [
+    {"nombre": "Personal", "personas": "1 persona", "max_sabores": 1},
+    {"nombre": "Mediana", "personas": "2 personas", "max_sabores": 2},
+    {"nombre": "Grande", "personas": "3 personas", "max_sabores": 3}
+  ],
+  "pizzas": [
+    {"sabor": "Bodegón Especial", "descripcion": "Pollo, jamón, salami y pepperoni.", "personal": 30900, "mediana": 57900, "grande": 72900},
+    {"sabor": "Bodegón Oeste", "descripcion": "Al estilo mexicano (fríjol, boloñesa, pico de gallo, tacos y queso).", "personal": 28900, "mediana": 53500, "grande": 67500},
+    {"sabor": "Trucha di Bodegón", "descripcion": "Trucha fresca y ahumada con rúgula, queso de búfala, mantequilla de cebolla, cilantro y reducción de balsámico.", "personal": 34500, "mediana": null, "grande": null},
+    {"sabor": "Bodegón Criolla", "descripcion": "Chorizo, madurito, maíz tierno y salsa criolla.", "personal": 28900, "mediana": 53500, "grande": 67500},
+    {"sabor": "Tropical", "descripcion": "Variedad de frutas (piña, melocotón, coco rallado, ciruela, cereza, breva, uva pasa).", "personal": 28900, "mediana": 53500, "grande": 67500},
+    {"sabor": "Mela Mandorla", "descripcion": "Manzana melada, pepperoni gourmet, almendra laminada y queso de búfala.", "personal": 30900, "mediana": 57900, "grande": 72900},
+    {"sabor": "Fresca", "descripcion": "Tomate cherry, queso de búfala, rúgula y semillas horneadas.", "personal": 24900, "mediana": 50500, "grande": 64900},
+    {"sabor": "Del Mar", "descripcion": "Anillos de calamar, filete de trucha y palmitos en salsa de camarones.", "personal": 34500, "mediana": 64900, "grande": 81500},
+    {"sabor": "Marinera", "descripcion": "Camarón, atún y anchoa en todo su sabor.", "personal": 36900, "mediana": 70900, "grande": 89900},
+    {"sabor": "Pollo y Tocineta", "descripcion": null, "personal": 29500, "mediana": 54900, "grande": 69500},
+    {"sabor": "Pollo y Champiñón", "descripcion": null, "personal": 29500, "mediana": 54900, "grande": 69500},
+    {"sabor": "Pollo Miel Mostaza", "descripcion": null, "personal": 29500, "mediana": 54900, "grande": 69500},
+    {"sabor": "Napolitana y Champiñones", "descripcion": null, "personal": 24900, "mediana": 44900, "grande": 60900},
+    {"sabor": "Hawaiana", "descripcion": null, "personal": 29500, "mediana": 54900, "grande": 69500},
+    {"sabor": "Ciruela y Tocineta", "descripcion": null, "personal": 29900, "mediana": 55500, "grande": 70500}
+  ],
+  "platos": {
+    "Entradas": [
+      ["Ensalada César", 22500], ["Ensalada César +Pollo", 30500],
+      ["Ensalada Mexicana", 24500], ["Ensalada Mexicana +Pollo", 32500],
+      ["Crema Trucha", 20900], ["Crema Pollo Champiñón", 18900],
+      ["Crema Tomate", 16900], ["Capunata", 24900]
+    ],
+    "Pastas": [
+      ["Mediterránea", 51500, "Lasaña / Espagueti / Tallarín"],
+      ["Marinera", 48500, "Lasaña / Espagueti / Tallarín"],
+      ["Oriental", 40500, "Lasaña / Espagueti"],
+      ["Carbonara", 38900, "Espagueti / Tallarín"],
+      ["Pesto y Camarones", 38900, "Espagueti / Tallarín"],
+      ["Pollo Champiñón", 38900, "Lasaña / Espagueti / Canelón"],
+      ["Pollo Boloñesa", 38900, "Lasaña / Espagueti / Canelón"],
+      ["Pollo Camarón", 44500, "Lasaña / Espagueti / Canelón"],
+      ["Pollo y Espinaca", 38900, "Canelón"],
+      ["Boloñesa y Espinaca", 44500, "Canelón"],
+      ["Camarón", 38900, "Canelón"],
+      ["Pollo Tocineta", 44500, "Espagueti / Tallarín"]
+    ],
+    "Raviolis": [["Ricota y Espinaca", 40900], ["Boloñesa o Pollo", 40900]],
+    "Hojaldrados": [
+      ["Camarones (Panzerotti)", 48500], ["Camarones (Siciliana)", 35900],
+      ["Pollo y Champiñón (Panzerotti)", 39900], ["Pollo y Champiñón (Siciliana)", 29900],
+      ["Hawaiano (Panzerotti)", 39900], ["Oriental (Panzerotti)", 40500],
+      ["Napolitano (Panzerotti)", 35500]
+    ],
+    "Mixtos": [["Napolitano", 48500], ["California", 48500]],
+    "Bebidas": [
+      ["Jugo Natural", 8900], ["Crema de Fruta Natural", 10900], ["Limonada de Coco", 10500],
+      ["Limonada con Hierbabuena", 8500], ["Mandarinada", 8900], ["Limonada Natural", 7900],
+      ["Soda Italiana Bretaña", 12900], ["Gaseosa", 6500]
+    ],
+    "Cervezas": [["Nacionales", 7500], ["Importadas", 9500], ["BBC", 10000], ["Artesanales", 12000]],
+    "Aperitivos": [["Mojito", 18900], ["Vino Caliente", 13000], ["Copa de Vino (150 ml)", 8900], ["Aperol Spritz", 18900]],
+    "Postres": [
+      ["Tartaleta de manzana o banano con helado", 17500], ["Copa de Brownie con helado", 13500],
+      ["Pizza de Nutella con Helado", 17500], ["Malteada", 15500]
+    ]
+  }
+}
